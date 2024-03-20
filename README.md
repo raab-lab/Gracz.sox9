@@ -6,7 +6,7 @@ STILL TO DO:
 1.  Then clone your new repository locally:
 
     ``` bash
-    git clone https://github.com/jabrinkman/Gracz.sox9.git
+    git clone https://github.com/raablab/Gracz.sox9.git
     ```
 
 2.  Rename the `GraczSox9.Rproj` file
