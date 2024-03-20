@@ -1,23 +1,16 @@
-# project-template
+# Gracz.sox9
 
-This is a template for R analysis projects for the Raab lab, forked from the Phantsiel lab.
+The README contains information about this project. Here I will describe my analyses, processing steps, or approaches. Most importantly, the README will contain information about this raw data. Describe 1) how the raw data was generated: bulk ATAC, Cut&Tag, and RNA-seq, 2) where it was obtained: Emory uni, and 3) how it can be accessed for others: tbd. This is the perfect place to describe steps that will be carried out on the command line or on a remote cluster.
 
-## How to use this template
-
-1.  Create a repository from this template according to these instructions, make sure to select 'raab-lab' as owner so everyone in the lab can have access: <https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template>
-
-2.  Then clone your new repository locally:
+STILL TO DO:
+1.  Then clone your new repository locally:
 
     ``` bash
-    git clone https://github.com/{YourUserName}/{YourRepoName}.git
+    git clone https://github.com/jabrinkman/Gracz.sox9.git
     ```
 
-3.  Rename the `project-template.Rproj` file to `{YourRepoName}.Rproj`
+2.  Rename the `GraczSox9.Rproj` file
 
-
-## What to put in `README.md`
-
-The README contains information about your project. Here you can describe your analyses, processing steps, or approaches. Most importantly, the README should contain information about your raw data. Describe 1) how the raw data was generated, 2) where it was obtained, and 3) how it can be accessed for others. This is the perfect place to describe steps that were carried out on the command line or on a remote cluster.
 
 ## Snakefile
 
@@ -43,7 +36,7 @@ project-template/
 │   │   ├── atac
 │   │   ├── cnr
 │   │   └── rna
-│   └── source_data		<- Here is where you should link in data from pipeline runs
+│   └── source_data		<- Here is where I will link in data from pipeline runs
 │       ├── atac
 │       ├── cnr
 │       └── rna
@@ -52,7 +45,7 @@ project-template/
 │   ├── cnr
 │   ├── integrate
 │   └── rna
-├── project-template.Rproj	<- Rename this to your project name
+├── GraczSox9.Rproj	<- Rename this to your project name
 ├── README.md
 ├── renv
 ├── renv.lock			<- For use with the `renv` package. Helps everyone stay in the same R environment
