@@ -1,0 +1,436 @@
+---
+title: "rna.sox9"
+author: "Jackie Brinkman"
+format:
+  html:
+    embed-resources: true
+cache: true
+---
+
+## RNA-Seq EDA on Sox9-EGFP sorted hepatocytes in a model of bile duct liver injury
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+```{r load data}
+#| echo: true
+#| output: false
+
+library(tidyverse)
+library(ggplot2)
+library(DESeq2) 
+library(tximeta)
+library(readr)
+library(devtools)
+
+#point to quants files 
+input_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9/rna/quants"
+#point to sample metadata 
+samples <- read.csv('/Users/jbrink/Desktop/Lab2024/gracz.sox9/20240320_RNAsamplesheet.csv', header=TRUE)
+```
+
+```{r}
+#| output: false
+#make coldata by copying sample metadata, adding col of files, names (which is sampleID)
+coldata <- samples
+coldata$names <- paste('1',
+                       coldata$SampleID, 
+                       coldata$Cell.Line, 
+                       coldata$Treatment, 
+                       coldata$Replicate, 
+                       sep = '_')
+#file.path basically constructs the path & produces a character vector of args concat term by term. so i 
+coldata$files <- file.path(input_dir, coldata$names, 'quant.sf')
+
+#generate RangedSummarizedExperiment
+se <- tximeta(coldata)
+
+#include assignRanges controls the way that the rowRanges of the output object are assigned. choose abundant for most abundant isoform (expressed gene)
+gse <- summarizeToGene(se, assignRanges = "abundant")
+
+#generate count matix. 
+counts <- assay(gse)
+```
+
+```{r}
+#Make DESeqDataset. filter out lowly expressing genes in dds then vst the counts in dds
+dds <- DESeqDataSet(gse, design = ~Treatment)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+vsd <- vst(dds)
+
+# get vs scaled counts and set rownames to gene symbol
+vs_counts <- assay(vsd)
+rownames(vs_counts) <- rowData(vsd)$gene_name
+```
+```{r}
+#this before PCA to look for 1) how many of my genes have no variance and 2) to set filtering metrics (which i did above) to toss 50 genes
+library(vsn)
+meanSdPlot(vs_counts)
+```
+
+```{r}
+#so this is plotting a histogram of the frequency of gene variance (rowVars is vector of subsetted rows to calc variance on. 
+#most of my genes are not variable so ill filter them out for downstream EDA
+gene.var <- rowVars(vs_counts)
+hist(log1p(gene.var))
+quantile(log1p(gene.var), probs = c(0, .25, .5, .75, .9))
+#this result shows me the variance values that correspond to the gene percentiles. so 75% of my genes have .16 variance
+```
+
+```{r}
+#now that I know the most variable gene cut-offs in my dataset that are log transformed. i can set up my PCA
+#filter the most variable genes
+quants <- quantile(log1p(gene.var), probs = c(.90))
+keep.9 <- log1p(gene.var) >= quants
+dds.filt <- dds[keep.9, ]
+vsd.9 <- vst(dds.filt)
+
+#create a matrix from our dataframe of counts where gene names are rows
+vs_counts.9 <- assay(vsd.9)
+rownames(vs_counts.9) <- rowData(vsd.9)$gene_name
+
+#Perform the PCA
+pca <- prcomp(vs_counts.9, center = TRUE, scale = TRUE)
+
+colors <- ifelse(
+  coldata$Treatment == "chow",
+  "red",
+  "black"
+)
+
+#Plot PC1-2
+plot(pca_df [,"PC1"], 
+     pca_df[, "PC3"], 
+     col = colors, 
+     pch = 16
+)
+```
+
+```{r}
+#PC loadings the $ operator extracts the rotation to extract rotation data. in prcomp rotation = variable loadings
+#output = PC x sample matrix where loadings are the data
+pca_df <- pca$rotation
+
+pca_loadings <- pca_df %>% 
+  as_tibble(rownames = "gene")
+
+#I'm not really sure how to quickly view if a PC is assoicated with my suspected outlier so I'm trying this 
+pheatmap(
+  pca_df,
+  scale = "column"
+)
+```
+
+```{r}
+#check to see what samples drive the variance in each PC. It looks like my potential outlier, Ms1658 has the largest weight in PC3
+loadings <- pca_df
+
+#check to see what genes drive the variance in each PC. Tubb5
+pc_scores <- pca$x
+pc_scores
+
+pc_scores <- pc_scores %>% 
+  as_tibble(rownames = "gene")
+```
+
+```{r}
+#jesse like this over prcomp so i just plot it
+plotPCA(vsd.9, 
+        intgroup = c("Treatment", "SampleID"))+ ggplot2::theme_classic() + scale_color_brewer(palette = "Paired")
+
+ggsave(file = "PCA_RNA_UninjDdc.svg",
+        plot= DEG,
+        width= 10,
+        height= 8)
+```
+
+```{r}
+p <- plotCounts(dds, gene =  "", intgroup = c("Treatment", "SampleID"), returnData=TRUE)
+
+p %>% 
+   ggplot(aes(x = Treatment, 
+              y = log2(count), 
+              label = SampleID)) + geom_point() + geom_label_repel()
+```
+
+```{r}
+#zscore calc
+zscore_load <- (loadings- colMeans(loadings)) / colSdDiffs(loadings)
+zscore_load
+
+pheatmap(
+  loadings,
+  scale = "column"
+)
+
+counts_corrs <- cor(vs_counts.9)
+
+annotations <- coldata[, c("Treatment", "SampleID")]
+annotations$PC2 <- loadings[, "PC2"]
+rownames(annotations) <- colnames(counts_corrs)
+
+pheatmap(
+  counts_corrs,
+  annotation_col = annotations)
+  #[, c("Treatment", "PC3")]
+```
+
+```{r}
+dds <- DESeq(dds)
+res <- results(dds, tidy = TRUE) #setting col and then converting to a tibble
+
+#build table of additional gene symbols has the first column called "row"
+new.table <- data.frame(row = res$row, 
+                        symbol = rowData(dds)$gene_name)
+m.res <- merge(res, 
+               new.table,
+               all.x = TRUE
+)
+```
+
+```{r}
+#Shrink effect size and output is dataframe that looks like DESeq res
+library(apeglm)
+resShrink <- lfcShrink(dds,  
+                       coef = "Treatment_chow_vs_6wk.ddc",
+                       type="apeglm"
+)
+
+tidy.resShrink <- as.data.frame(resShrink) 
+
+#assign symbol in new.table to new col in tidy.resShrink
+tidy.resShrink$symbol <- new.table$symbol
+```
+
+```{r}
+#Draw histogram of p values for res vs shrunk res. looks the same.
+hist(res$padj, breaks=20, col="grey", main="DESeq2 p-value distribution", xlab="DESeq2 P-value", ylab="Number of genes")
+
+hist(resShrink$padj, breaks=20, col="grey", main="DESeq2 p-value distribution", xlab="DESeq2 P-value", ylab="Number of genes")
+```
+
+```{r}
+plotMA(res, ylim=c(-2,2))
+```
+
+```{r}
+plotMA(resShrink, ylim=c(-2,2))
+```
+
+```{r}
+select <- order(rowMeans(vs_counts),
+                decreasing=TRUE)[1:30]
+df <- coldata[, c("Treatment", "SampleID")]
+rownames(df) <- colnames(vs_counts)
+
+pheatmap(vs_counts[select,], 
+         cluster_rows=FALSE, 
+         show_rownames=TRUE, 
+         show_colnames = FALSE,
+         cluster_cols=FALSE, 
+         annotation_col=df)
+```
+
+```{r}
+topVarGene <- head(order(rowVars(vs_counts), decreasing = TRUE ), 20)
+
+mat <- vs_counts[topVarGene, ]
+mat <- mat - rowMeans(mat)
+              
+pheatmap(mat, 
+         cluster_rows=FALSE, 
+         cluster_cols=FALSE, 
+         show_colnames = FALSE,
+         annotation_col= df)
+```
+
+```{r}
+library(EnhancedVolcano)
+DEG <-EnhancedVolcano(tidy.resShrink,
+    lab = tidy.resShrink$symbol,
+    x = 'log2FoldChange',
+    y = 'padj',
+    drawConnectors = TRUE,
+    arrowheads = FALSE,
+    title = "uninjured vs 6wk.ddc apeglm lfc shrunk")
+
+ggsave(file = "test.svg",
+        plot= DEG,
+        width= 10,
+        height= 8)
+
+```
+
+```{r filter mup genes from counts and DEG lists}
+topDE <- tidy.resShrink[abs(tidy.resShrink$log2FoldChange) > 1, "symbol"]
+
+
+# get mup genes an remove them from topDE
+is_mup <- str_starts(rownames(vs_counts), "Mup") # returns logic vector
+mups <- rownames(vs_counts)[is_mup] # contains mup gene symbols
+topDE_no_mups <- topDE[!topDE %in% mups]
+
+# counts of topDE genes with mups removed
+select2 <- vs_counts[topDE_no_mups,]
+
+# column annotations for pheatmap
+heat_annots <- coldata[, c("Treatment", "SampleID")]
+rownames(heat_annots) <- colnames(vs_counts)
+
+genes <- pheatmap(select2,
+         scale= "row",
+         show_colnames = FALSE,
+         annotation_col= heat_annots,
+         show_rownames = TRUE,
+         )
+```
+```{r}
+##these can be important so keeping for now
+#is_rik <- str_starts(rownames(vs_counts), "Rik") 
+#rik <- rownames(vs_counts) [is_rik]
+```
+
+```{r GSEA}
+#uninjured v DDC hepatocyte DEG enriched for pro-inflammatory gene regulation Geneset
+library(enrichplot)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(msigdbr)
+library(GSEABase)
+library(msigdb)
+
+m_df <- getMsigdb(
+  org = "mm",
+  id = "SYM"
+)
+
+h_pathways <- msigdb::subsetCollection(
+  m_df,
+  collection = "h"
+)
+
+#this is a function made by CY. This is my understanding of this
+make_gsea_term_df <- function(path_col) {
+  pathways <- Map(str_to_upper, geneIds(path_col))
+  df <- stack(pathways)
+  df <- df[, c("ind", "values")]
+  colnames(df) <- c("pathway", "symbol")
+   return(df)
+}
+
+h_paths <- make_gsea_term_df(h_pathways)
+
+res_clean <- na.omit(topDE.df)
+ranks <- res_clean$stat
+names(ranks) <- str_to_upper(res_clean$symbol)
+
+gsea_res <- GSEA(
+  ranks[order(ranks, decreasing = TRUE)],
+  TERM2GENE = h_paths,
+  pAdjustMethod = "fdr",
+  pvalueCutoff = 0.1
+)
+gsea_res
+
+```
+
+```{r gseGO}
+gene_list <- res_clean$log2FoldChange
+names(gene_list) <- res_clean$symbol
+gene_list = sort(gene_list, decreasing = TRUE)
+
+gse <- gseGO(geneList=gene_list, 
+             ont ="BP", 
+             keyType = "SYMBOL", 
+             minGSSize = 3, 
+             maxGSSize = 800, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = org.Mm.eg.db, 
+             pAdjustMethod = "fdr")
+
+
+require(DOSE)
+plot_gse <- pairwise_termsim(simplify(gse))
+plot_gse
+treeplot(plot_gse, showCategory = 15)
+  
+  ggsave(file = "GSEA_RNA_UninjDdc.svg",
+        plot= plot_gse,
+        width= 10,
+        height= 8)
+```
+
+```{r Driving outlier Ms1154 and Ms1638 expression}
+# counts of topDE genes with mups removed
+select2 <- vs_counts[topDE_no_mups,]
+
+# column annotations for pheatmap
+heat_annots <- coldata[, c("Treatment", "SampleID")]
+rownames(heat_annots) <- colnames(vs_counts)
+
+genes <- pheatmap(select2,
+         scale= "row",
+         show_colnames = FALSE,
+         annotation_col= heat_annots,
+         show_rownames = TRUE,
+         kmeans_k = 8
+         )
+
+clusters <- genes$kmeans
+
+mat2 <- as.data.frame(select2)
+mat2$clusters <- clusters$cluster
+write.csv(mat2, "/Users/jbrink/Desktop/Lab2024/gracz.sox9/rna/RNA_uninjured_injured_DEGkmeans.csv")
+
+mat2$genes <- rownames(mat2)
+
+#can't use the mat2[clusters$2, ] b/c clusters is an attribute of mat2 so you need to "go thru" mat2 to subset cluster 2 column data 
+## == boolean vector that indexes rows/cols and returns TRUE FALSE  
+#[i,j] give i or j TRUE FALSE vector or subset on rownames
+outliers <- rownames(mat2[mat2$cluster == 3, ])
+
+outlier.enrichGO <- enrichGO(gene = outliers,
+                            org.Mm.eg.db,
+                            keyType = "SYMBOL",
+                            ont           = "BP",
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 0.01,
+                            qvalueCutoff  = 0.05,
+                            readable      = TRUE)
+
+outlier.enrichGO 
+plot.outlier <- pairwise_termsim(outlier.enrichGO)
+treeplot(plot.outlier, showCategory = 15)
+
+outliers.stats <- tidy.resShrink[tidy.resShrink$symbol %in% outliers, ]
+outliers.stats <- outliers.stats[order(outliers.stats$log2FoldChange, decreasing = FALSE),]
+head(outliers.stats)
+```
+
+```{r NA pvalue genes and outlier genes overlap}
+na_pvalue_genes <- is.na(tidy.resShrink$pvalue)
+na_pvalue_genes <- tidy.resShrink[na_pvalue_genes, ]
+na_pvalue_gse <- vs_counts[na_pvalue_genes, ]
+na_pvalue_gse <- rownames(na_pvalue_gse)
+na_pvalue_gse_go <- enrichGO(gene = na_pvalue_gse,
+                            org.Mm.eg.db,
+                            keyType = "SYMBOL",
+                            ont           = "BP",
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 0.01,
+                            qvalueCutoff  = 0.05,
+                            readable      = TRUE
+)
+
+pheatmap(na_pvalue_gse,
+         scale= "row",
+         show_colnames = FALSE,
+         annotation_col= heat_annots,
+         show_rownames = TRUE
+         )
+write.csv(na_pvalue_gse, "/Users/jbrink/Desktop/Lab2024/gracz.sox9/rna/na_pvalue_gseGOlist.csv")
+
+intersect(outliers, rownames(na_pvalue_gse))
+```
