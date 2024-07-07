@@ -1,0 +1,208 @@
+---
+title: "rna_uninj_inj"
+author: "Jackie Brinkman"
+format: html
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+## Running Code
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r load data}
+#| echo: true
+#| output: false
+
+library(tidyverse)
+library(ggplot2)
+library(DESeq2) 
+library(tximeta)
+library(readr)
+library(devtools)
+
+#point to quants files 
+input_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9/rna/quants"
+#point to sample metadata 
+samples <- read.csv('/Users/jbrink/Desktop/Lab2024/gracz.sox9/20240320_RNAsamplesheet.csv', header=TRUE)
+```
+
+```{r coldata metadata}
+#| output: false
+#make coldata by copying sample metadata, adding col of files, names (which is sampleID)
+coldata <- samples
+coldata$names <- paste('1',
+                       coldata$SampleID, 
+                       coldata$Cell.Line, 
+                       coldata$Treatment, 
+                       coldata$Replicate, 
+                       sep = '_')
+#file.path basically constructs the path & produces a character vector of args concat term by term. so i 
+coldata$files <- file.path(input_dir, coldata$names, 'quant.sf')
+
+#generate RangedSummarizedExperiment
+se <- tximeta(coldata)
+
+#include assignRanges controls the way that the rowRanges of the output object are assigned. choose abundant for most abundant isoform (expressed gene)
+gse <- summarizeToGene(se, assignRanges = "abundant")
+
+#generate count matix.
+counts <- assay(gse)
+```
+
+```{r DES}
+#Make DESeqDataset. filter out lowly expressing genes in dds then vst the counts in dds
+dds <- DESeqDataSet(gse, design = ~Treatment)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+vsd <- vst(dds)
+
+# get vs scaled counts and set rownames to gene symbol
+vs_counts <- assay(vsd)
+rownames(vs_counts) <- rowData(vsd)$gene_name
+```
+
+
+```{r DESeq2 res}
+dds <- DESeq(dds)
+res <- results(dds, tidy = TRUE) #setting col and then converting to a tibble
+
+#build table of additional gene symbols has the first column called "row"
+new.table <- data.frame(row = res$row, 
+                        symbol = rowData(dds)$gene_name)
+m.res <- merge(res, 
+               new.table,
+               all.x = TRUE
+)
+resShrink <- lfcShrink(dds,  
+                       coef = "Treatment_chow_vs_6wk.ddc",
+                       type="apeglm"
+)
+
+tidy.resShrink <- as.data.frame(resShrink) 
+#assign symbol in new.table to new col in tidy.resShrink
+tidy.resShrink$symbol <- new.table$symbol
+```
+
+
+```{r data viz. all genes}
+#rownames(vs_counts) <- rowData(vsd)$gene_name as a reminder what vs_counts is
+select <- order(rowMeans(vs_counts),
+                decreasing=TRUE)[1:30]
+df <- coldata[, c("Treatment", "SampleID")]
+rownames(df) <- colnames(vs_counts)
+
+pheatmap(vs_counts[select,], 
+         cluster_rows=FALSE, 
+         show_rownames=TRUE, 
+         show_colnames = FALSE,
+         cluster_cols=FALSE,
+         annotation_col=df)
+```
+
+```{r data viz. GSEA}
+#uninjured v DDC hepatocyte DEG enriched for pro-inflammatory gene regulation Geneset
+library(enrichplot)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(msigdbr)
+library(GSEABase)
+library(msigdb)
+
+m_df <- getMsigdb(
+  org = "mm",
+  id = "SYM"
+)
+
+h_pathways <- msigdb::subsetCollection(
+  m_df,
+  collection = "h"
+)
+
+#this is a function made by CY#
+make_gsea_term_df <- function(path_col) {
+  pathways <- Map(str_to_upper, geneIds(path_col))
+  df <- stack(pathways)
+  df <- df[, c("ind", "values")]
+  colnames(df) <- c("pathway", "symbol")
+   return(df)
+}
+
+h_paths <- make_gsea_term_df(h_pathways)
+
+###GSEGo on Most Upregulated DEG###
+topDE <- tidy.resShrink[tidy.resShrink$log2FoldChange > 1 &
+                       !is.na(tidy.resShrink$padj), ]
+
+
+gene_list <- topDE$symbol
+names(gene_list) <- str_to_upper(topDE$symbol)
+
+
+gse <- enrichGO(gene_list, 
+                org.Mm.eg.db,
+                keyType = "SYMBOL",
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+
+require(DOSE)
+plot_gse <- pairwise_termsim(simplify(gse))
+plot_gse
+treeplot.gse <- treeplot(plot_gse, showCategory = 10)
+
+heatplot.gse <- heatplot(plot_gse, showCategory= 10) +
+                      theme(text = element_text(size = 10)) 
+
+ridgeplot.gse<- ridgeplot(plot_gse) + 
+                        labs(x = "enrichment distribution")
+
+ggsave(file = "ENRICHRheatplot_RNA_UninjDdc_DEGup.svg",
+        plot= heatplot.gse,
+        width= 10,
+        height= 8
+)
+
+```
+```{r GSEgo on bottom DEG}
+###GSEGo on Most Upregulated DEG. way more genes###
+bottomDE <- tidy.resShrink[tidy.resShrink$log2FoldChange < -3 &
+                       !is.na(tidy.resShrink$padj), ]
+
+
+gene_list <- bottomDE$symbol
+names(gene_list) <- str_to_upper(topDE$symbol)
+
+
+gse <- enrichGO(gene_list, 
+                org.Mm.eg.db,
+                keyType = "SYMBOL",
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.05,
+                readable      = TRUE)
+
+
+require(DOSE)
+plot_gse <- pairwise_termsim(gse)
+plot_gse
+treeplot.gse <- treeplot(plot_gse, showCategory = 10)
+
+heatplot.gse <- heatplot(plot_gse, showCategory= 10) +
+                      theme(text = element_text(size = 10)) 
+
+ridgeplot.gse<- ridgeplot(plot_gse) + 
+                        labs(x = "enrichment distribution")
+
+ggsave(file = "ENRICHRheatplot_RNA_UninjDdc_DEGdownLFC3.svg",
+        plot= heatplot.gse,
+        width= 10,
+        height= 8
+)
+```
+```{r save obj and files}
+write_csv()
+```
