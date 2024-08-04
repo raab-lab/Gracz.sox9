@@ -2,14 +2,7 @@
 
 The README contains information about this project. Here I will describe my analyses, processing steps, or approaches. Most importantly, the README will contain information about this raw data. Describe 1) how the raw data was generated: bulk ATAC, Cut&Tag, and RNA-seq, 2) where it was obtained: Emory uni, and 3) how it can be accessed for others: tbd. This is the perfect place to describe steps that will be carried out on the command line or on a remote cluster.
 
-STILL TO DO:
-1.  Then clone your new repository locally:
-
-    ``` bash
-    git clone https://github.com/raablab/Gracz.sox9.git
-    ```
-
-2.  Rename the `GraczSox9.Rproj` file
+as of 7/2/24- no cut&tag data or cut&run
 
 
 ## Snakefile
