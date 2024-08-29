@@ -1,16 +1,10 @@
 ---
-title: "rna_uninj_inj"
+title: "DEG_uninj_inj_Sox9_Heps"
 author: "Jackie Brinkman"
 format: html
 ---
-
 ## Quarto
-
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-## Running Code
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-
-```{r load data}
+```{r load libraries}
 #| echo: true
 #| output: false
 
@@ -20,11 +14,15 @@ library(DESeq2)
 library(tximeta)
 library(readr)
 library(devtools)
+library(BiocManager)
+```
 
+
+```{r load data}
 #point to quants files 
-input_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9/rna/quants"
+input_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/rna/quants"
 #point to sample metadata 
-samples <- read.csv('/Users/jbrink/Desktop/Lab2024/gracz.sox9/20240320_RNAsamplesheet.csv', header=TRUE)
+samples <- read.csv('/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20240320_RNAsamplesheet.csv', header=TRUE)
 ```
 
 ```{r coldata metadata}
@@ -37,22 +35,28 @@ coldata$names <- paste('1',
                        coldata$Treatment, 
                        coldata$Replicate, 
                        sep = '_')
-#file.path basically constructs the path & produces a character vector of args concat term by term. so i 
+#file.path basically constructs the path & produces a character vector of args concat term by term
 coldata$files <- file.path(input_dir, coldata$names, 'quant.sf')
+```
 
+
+```{r coldata metadata}
 #generate RangedSummarizedExperiment
 se <- tximeta(coldata)
+```
 
+
+```{r coldata metadata}
 #include assignRanges controls the way that the rowRanges of the output object are assigned. choose abundant for most abundant isoform (expressed gene)
 gse <- summarizeToGene(se, assignRanges = "abundant")
-
-#generate count matix.
-counts <- assay(gse)
 ```
 
 ```{r DES}
 #Make DESeqDataset. filter out lowly expressing genes in dds then vst the counts in dds
 dds <- DESeqDataSet(gse, design = ~Treatment)
+
+#generate count matrix
+counts <- assay(gse)
 keep <- rowSums(counts(dds)) >= 10
 dds <- dds[keep,]
 vsd <- vst(dds)
