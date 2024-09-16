@@ -43,15 +43,10 @@ coldata$files <- file.path(input_dir, coldata$names, 'quant.sf')
 ```{r coldata metadata}
 #generate RangedSummarizedExperiment
 se <- tximeta(coldata)
-```
-
-
-```{r coldata metadata}
 #include assignRanges controls the way that the rowRanges of the output object are assigned. choose abundant for most abundant isoform (expressed gene)
 gse <- summarizeToGene(se, assignRanges = "abundant")
 ```
-
-```{r DES}
+```{r Make DESeqDataset}
 #Make DESeqDataset. filter out lowly expressing genes in dds then vst the counts in dds
 dds <- DESeqDataSet(gse, design = ~Treatment)
 
@@ -64,6 +59,10 @@ vsd <- vst(dds)
 # get vs scaled counts and set rownames to gene symbol
 vs_counts <- assay(vsd)
 rownames(vs_counts) <- rowData(vsd)$gene_name
+```
+```{r}
+plotPCA(vsd, 
+        intgroup = c("Treatment", "SampleID"))+ ggplot2::theme_classic() + scale_color_brewer(palette = "Paired")
 ```
 
 
