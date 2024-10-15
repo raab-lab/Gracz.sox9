@@ -69,6 +69,10 @@ vsd <- vst(dds)
 # get vs scaled counts and set rownames to gene symbol
 vs_counts <- assay(vsd)
 rownames(vs_counts) <- rowData(vsd)$gene_name
+
+#write counts x gene to csv
+counts_genes_df_csv <- write.csv(vs_counts, 
+                              file ='/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20241010_uninj_inj_counts.csv')
 ```
 
 ```{r make a pca of samples after batch effect removal for paper viz}
@@ -115,7 +119,7 @@ res_genes_df <- merge(res,
                       all.x = TRUE)
 #write results
 res_genes_df_csv <- write.csv(res_genes_df, 
-                              file ='/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20240903_uninj_inj_DEG.csv')
+                              file ='/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20241010_uninj_inj_DEGFig3.csv')
 ```
 
 ```{r DESeq2 res shrink LFC}
@@ -130,32 +134,39 @@ tidy_resShrink$symbol <- res_gene_names$symbol
 
 #write results
 res_LFCshrink_genes_df_csv <- write.csv(res_genes_df, 
-                                      file='/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20240903_uninj_inj_DEG_LFCshrink.csv')
+                                      file='/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20241010_uninj_inj_DEG_LFCshrinkFig3.csv')
+```
+
+```{r}
+# Identify Mup genes in tidy_resShrink
+is_mup <- str_starts(tidy_resShrink$symbol, "Mup")
+
+# Filter out Mup genes from tidy_resShrink
+tidy_resShrink_no_mups <- tidy_resShrink[!is_mup, ]
+write.csv(tidy_resShrink_no_mups, file='/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20241010_DEG_FIG3_noMups_shrunkres.csv')
+                                  
 ```
 
 ```{r volcano plot of all genes with LFC shrink}
-EnhancedVolcano(tidy_resShrink,
-                lab = res_no_mups,
+EnhancedVolcano(tidy_resShrink_no_mups,
+                lab = tidy_resShrink_no_mups$symbol,
                 x = 'log2FoldChange',
                 y = 'pvalue',
-                title = 'DEG Sox9+ hepatocytes: uninjured v. DDC',
+                title = 'DEG Sox9+ hepatocytes: injured v. uninjured',
                 #selectLab = c('Bmp6','Klf4'),
                # pCutoff = 10e-30,
                 #FCcutoff = 0.5,
                 pointSize = 3.0,
                 labSize = 6.0
 )
-ggsave(file = "/Users/jbrink/Gracz.sox9/20240903_uninj_inj_volcano_LFCshrinkres.svg",
+ggsave(file = "/Users/jbrink/Gracz.sox9/20241010_USETHISFIG3_uninj_inj_volcano_LFCshrinkres.svg",
         width= 10,
         height= 8
 )
-
 ```
-
 ```{r data viz. all genes}
 #rownames(vs_counts) <- rowData(vsd)$gene_name as a reminder what vs_counts is
-select <- order(rowMeans(vs_counts),
-                decreasing=TRUE)[1:30]
+select <- order(rowMeans(vs_counts), decreasing=TRUE)[1:30]
 df <- coldata[, c("Treatment", "SampleID")]
 rownames(df) <- colnames(vs_counts)
 
@@ -167,38 +178,37 @@ pheatmap(vs_counts[select,],
          annotation_col=df)
 ```
 ```{r filtering out non-sig genes from results before plotting}
-res_filt <- tidy_resShrink[abs(tidy_resShrink$log2FoldChange) > 4.0 & tidy_resShrink$padj < 0.1, "symbol"]
+res_filt <- tidy_resShrink_no_mups[abs(tidy_resShrink_no_mups$log2FoldChange) > 4.0 & tidy_resShrink_no_mups$padj < 0.1, "symbol"]
 #res_filt <- tidy_resShrink[abs(tidy_resShrink$log2FoldChange) > 2.0, "symbol"]
+```
 
+
+```{r filtering out non-sig genes from results before plotting}
 # get mup genes and remove them 
 is_mup <- str_starts(rownames(vs_counts), "Mup") # returns logic vector
 mups <- rownames(vs_counts)[is_mup]# contains mup gene symbols
-
 counts_no_mups <- vs_counts[!is_mup,]
+#res_no_mups <- res_filt[!res_filt %in% mups]
+```
 
-res_no_mups <- res_filt[!res_filt %in% mups]
-
+```{r filtering out non-sig genes from results before plotting}
 # Check for missing genes
-missing_genes <- topDE_no_mups[!topDE_no_mups %in% rownames(vs_counts)]
+missing_genes <- res_filt[!res_filt %in% rownames(vs_counts)]
 if (length(missing_genes) > 0) {
   warning("The following genes are not present in vs_counts: ", paste(missing_genes, collapse = ", "))
 }
 
-#this shows that filtering for padj means leaving NAs. I need to filter them out.
+#this shows that filtering for padj means leaving 11 NAs. I need to filter them out.
 # Remove rows with NA values from topDE
-res_no_mups <- na.omit(res_no_mups)
+res_filt <- na.omit(res_filt)
 
 # counts of topDE genes with mups removed
-plot_genes <- vs_counts[res_no_mups,]
+plot_genes <- vs_counts[res_filt,]
 ```
 
 ```{r plotting specific gene counts}
-
 plotCounts(dds, gene= "ENSMUSG00000037852", intgroup = "Treatment")
-
 ```
-
-
 ```{r}
 # column annotations for pheatmap
 heat_annot <- coldata[, c("Treatment", "SampleID")]
@@ -213,7 +223,7 @@ pheatmap(plot_genes,
          scale = "row")
 ```
 ```{r trying other heatmaps for clustering analysis}
-mat <- vs_counts[res_no_mups,]
+mat <- vs_counts[res_filt,]
 mat <- mat - rowMeans(mat)
 
 gene_clust <- Heatmap(mat,
@@ -226,6 +236,8 @@ clust_list <- row_dend(gene_clust)
 ```
 
 ```{r}
+#kmeans clustering of DEG: LFC abs(4) and padj <0.05 =193 genes
+set.seed(123)
 hm <- Heatmap(mat,
         row_km = 4,
         row_km_repeats = 2,
@@ -236,19 +248,23 @@ hm <- Heatmap(mat,
         )
 hm
 ```
-```{r}
 
+```{r}
+# Set the output to an SVG file
+svg("20241010_DEGFIG3_kmeans_heatmap_output.svg", width = 10, height = 8) 
+set.seed(123)
 hm <- draw(hm)
+
+
 gene_clusts <- row_dend(hm)
 
-clust1_genes <- row_order(hm)[['1']]
+clust1_genes <- row_order(hm)[['4']]
 ```
 
 ```{r}
 mat[clust1_genes, ]
 
 rownames(mat[clust1_genes, ])
-
 ```
 
 ```{r}
@@ -289,76 +305,39 @@ make_gsea_term_df <- function(path_col) {
 }
 
 h_paths <- make_gsea_term_df(h_pathways)
+h_gene_sets <- split(h_paths$symbol, h_paths$pathway)
+h_gene_sets_df <- stack(h_gene_sets)
+colnames(h_gene_sets_df) <- c("GENE", "TERM")
 
-###GSEGo on Most Upregulated DEG###
-topDE <- tidy.resShrink[tidy.resShrink$log2FoldChange > 1 &
-                       !is.na(tidy.resShrink$padj), ]
-
-
-gene_list <- topDE$symbol
-names(gene_list) <- str_to_upper(topDE$symbol)
-
-
-gse <- enrichGO(gene_list, 
-                org.Mm.eg.db,
-                keyType = "SYMBOL",
-                ont           = "BP",
-                pAdjustMethod = "fdr",
-                pvalueCutoff  = 0.05,
-                readable      = TRUE)
-
-
-require(DOSE)
-plot_gse <- pairwise_termsim(simplify(gse))
-plot_gse
-treeplot.gse <- treeplot(plot_gse, showCategory = 10)
-
-heatplot.gse <- heatplot(plot_gse, showCategory= 10) +
-                      theme(text = element_text(size = 10)) 
-
-ridgeplot.gse<- ridgeplot(plot_gse) + 
-                        labs(x = "enrichment distribution")
-
-ggsave(file = "ENRICHRheatplot_RNA_UninjDdc_DEGup.svg",
-        plot= heatplot.gse,
-        width= 10,
-        height= 8
+h_gene_sets_df <- data.frame(
+  TERM = as.character(h_gene_sets_df$TERM),
+  GENE = as.character(h_gene_sets_df$GENE)
 )
 
+# get differential expression results from DESeq2
+deseq_res <- results(dds)
+
+# Create a ranked gene list by log2 fold change
+ranked_genes <- tidy_resShrink_no_mups$log2FoldChange
+names(ranked_genes) <- tidy_resShrink_no_mups$symbol
+names(ranked_genes) <- toupper(names(ranked_genes))
+ranked_genes <- ranked_genes[!is.na(ranked_genes)]
+ranked_genes <- sort(ranked_genes, decreasing = TRUE)
+
+ranked_genes <- ranked_genes[names(ranked_genes) %in% h_gene_sets_df$GENE]
+
+
+gsea_res <- GSEA(
+  ranked_genes,
+  TERM2GENE = h_gene_sets_df,
+  pvalueCutoff = 0.05,
+  verbose = TRUE
+)
 ```
-```{r GSEgo on bottom DEG}
-###GSEGo on Most Upregulated DEG. way more genes###
-bottomDE <- tidy.resShrink[tidy.resShrink$log2FoldChange < -3 &
-                       !is.na(tidy.resShrink$padj), ]
-
-
-gene_list <- bottomDE$symbol
-names(gene_list) <- str_to_upper(topDE$symbol)
-
-
-gse <- enrichGO(gene_list, 
-                org.Mm.eg.db,
-                keyType = "SYMBOL",
-                ont           = "BP",
-                pAdjustMethod = "fdr",
-                pvalueCutoff  = 0.05,
-                readable      = TRUE)
-
-
-require(DOSE)
-plot_gse <- pairwise_termsim(gse)
-plot_gse
-treeplot.gse <- treeplot(plot_gse, showCategory = 10)
-
-heatplot.gse <- heatplot(plot_gse, showCategory= 10) +
-                      theme(text = element_text(size = 10)) 
-
-ridgeplot.gse<- ridgeplot(plot_gse) + 
-                        labs(x = "enrichment distribution")
-
-ggsave(file = "ENRICHRheatplot_RNA_UninjDdc_DEGdownLFC3.svg",
-        plot= heatplot.gse,
-        width= 10,
-        height= 8
-)
+```{r}
+head(gsea_res@result)
+dotplot(gsea_res, showCategory = 15)
+```
+```{r}
+gseaplot(gsea_res, geneSetID = "HALLMARK_IL6_JAK_STAT3_SIGNALING")
 ```
