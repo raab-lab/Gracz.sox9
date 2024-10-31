@@ -1,0 +1,71 @@
+```{r}
+library(plyranges)
+library(tidyverse)
+library(DESeq2)
+library(csaw)
+library(stringr)
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+```
+```{r}
+merged_bed <- read.table("~/Downloads/union_uninj_inj_atac.bed", header = FALSE)
+#granges <- GRanges(seqnames=merged_bed$V1, ranges=IRanges(start=merged_bed$V2, end=merged_bed$V3))
+load("~/Downloads/granges.RData")
+load("~/Downloads/peak_counts.RData")
+```
+
+```{r CSAW counts}
+# CSAW Setup
+#param = readParam(pe = 'both', dedup = F, minq = 10) # set this to 10 which matches my bam parameters, higher and we lose some numbers
+
+#peak_counts <- regionCounts(merged_bed, peak_counts, param = param)
+
+#peak_counts
+load("~/Downloads/peak_counts.RData")
+peak_counts
+```
+```{r}
+assayNames(peak_counts)
+count_matrix <- assay(peak_counts)
+```
+
+```{r}
+sample_info <- data.frame(row.names = colnames(count_matrix),
+                          condition = c("injured","injured","injured", "uninjured", "injured", "uninjured", "uninjured", "uninjured"),
+                          batch = c("B","B", "A", "A", "A", "B", "A", "A") 
+)
+colnames(count_matrix) <- rownames(sample_info)
+```
+
+```{r}
+dds_atac <- DESeqDataSetFromMatrix(countData = count_matrix, 
+                                   colData = sample_info, 
+                                   design = ~ condition + batch
+)
+dds_atac$condition <- relevel(dds_atac$condition, ref = "uninjured")
+des_atac <- DESeq(dds_atac)
+```
+```{r}
+res_atac <- results(des_atac)
+peak_annotation <- annotatePeak(granges, 
+                                TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
+                                annoDb = "org.Mm.eg.db"
+)
+```
+
+```{r}
+peak_meta <- mcols(peak_annotation@anno)
+vst_counts_atac <- assay(vst(dds_atac))
+meta_cols <- c("annotation", "SYMBOL")
+scaled_counts_meta_merge <- cbind(peak_meta[, meta_cols], vst_counts_atac)
+atac_res <- results(des_atac)
+
+scaled_counts_meta_merge[, "annotation_summary"] <- str_split_i(scaled_counts_meta_merge$annotation, " ", 1)
+to_heat <- scaled_counts_meta_merge[order(atac_res$padj)[0:300], ]
+
+pheatmap(
+  as.matrix(to_heat[, 4:ncol(to_heat)-1]),
+  annotation_row = to_heat[c("SYMBOL", "annotation_summary")],
+  annotation_col = colData(des_atac)
+)
+```
