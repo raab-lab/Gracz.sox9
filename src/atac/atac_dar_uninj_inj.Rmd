@@ -17,7 +17,6 @@ load("~/Downloads/peak_counts.RData")
 ```{r CSAW counts}
 # CSAW Setup
 #param = readParam(pe = 'both', dedup = F, minq = 10) # set this to 10 which matches my bam parameters, higher and we lose some numbers
-
 #peak_counts <- regionCounts(merged_bed, peak_counts, param = param)
 
 #peak_counts
@@ -45,6 +44,7 @@ dds_atac <- DESeqDataSetFromMatrix(countData = count_matrix,
 dds_atac$condition <- relevel(dds_atac$condition, ref = "uninjured")
 des_atac <- DESeq(dds_atac)
 ```
+
 ```{r}
 res_atac <- results(des_atac)
 peak_annotation <- annotatePeak(granges, 
@@ -62,10 +62,17 @@ atac_res <- results(des_atac)
 
 scaled_counts_meta_merge[, "annotation_summary"] <- str_split_i(scaled_counts_meta_merge$annotation, " ", 1)
 to_heat <- scaled_counts_meta_merge[order(atac_res$padj)[0:300], ]
+```
 
-pheatmap(
-  as.matrix(to_heat[, 4:ncol(to_heat)-1]),
-  annotation_row = to_heat[c("SYMBOL", "annotation_summary")],
-  annotation_col = colData(des_atac)
-)
+
+```{r}
+#annotation_row = to_heat[c("SYMBOL", "annotation_summary")],
+#annotation_col = colData(des_atac)
+
+ht = Heatmap(
+    as.matrix(to_heat[, 4:ncol(to_heat)-1]),
+    name = "atac dar"
+  )
+
+ht
 ```

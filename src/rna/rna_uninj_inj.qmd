@@ -3,7 +3,9 @@ title: "DEG_uninj_inj_Sox9_Heps"
 author: "Jackie Brinkman"
 format: html
 ---
+
 ## Quarto
+
 ```{r load libraries}
 #| echo: true
 #| output: false
@@ -20,6 +22,7 @@ library(pheatmap)
 library(ComplexHeatmap)
 library(renv)
 ```
+
 ```{r load data}
 #point to quants files 
 input_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/rna/quants"
@@ -47,13 +50,13 @@ coldata$files <- file.path(input_dir, coldata$names, 'quant.sf')
 #newdata <- coldata[row_to_keep, ]
 ```
 
-
 ```{r coldata metadata}
 #generate RangedSummarizedExperiment
 se <- tximeta(coldata)
 #include assignRanges controls the way that the rowRanges of the output object are assigned. choose abundant for most abundant isoform (expressed gene)
 gse <- summarizeToGene(se, assignRanges = "abundant")
 ```
+
 ```{r Make DESeqDataset}
 gse$Batch <- factor(gse$Batch)
 #Make DESeqDataset. filter out lowly expressing genes in dds then vst the counts in dds
@@ -78,11 +81,17 @@ counts_genes_df_csv <- write.csv(vs_counts,
 ```{r make a pca of samples after batch effect removal for paper viz}
 mm <- model.matrix(~Treatment, colData(vsd))
 mat <- limma::removeBatchEffect(vs_counts, batch=vsd$Batch, design=mm)
+rownames(mat) <- rownames(vsd)
+colnames(mat) <- colnames(vsd)
 assay(vsd) <- mat
+
+# color blind palette with grey:
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
 plotPCA(vsd, 
-        intgroup = c("Treatment", "SampleID")) + 
+        intgroup = c("Treatment")) + 
         ggplot2::theme_classic() + 
-        scale_color_brewer(palette = "Paired")
+        scale_color_brewer(palette = "cbbPallet")
 ```
 
 ```{r}
@@ -90,10 +99,12 @@ plotPCA(vsd,
 #plotPCA(vsd, 
         #intgroup = c("Treatment", "SampleID"))+ ggplot2::theme_classic() + scale_color_brewer(palette = "Paired")
 ```
+
 ```{r DESeq2 linear modeling}
 dds <- DESeq(dds)
 resultsNames(dds)
 ```
+
 ```{r DESeq2 linear modeling results}
 res <- results(dds, tidy = TRUE) #setting col and then converting to a tibble
 #summary(res) shows there are 12 NA's in padj column and 0 across other stat cols. this is fine.
@@ -104,10 +115,12 @@ na_both_count <- sum(is.na(res_shrink2$padj)) #& is.na(res_shrink$log2FoldChange
 
 print(paste("Number of rows where both padj and log2FoldChange are NA:", na_both_count))
 ```
+
 ```{r box plot for cooks distance b/c was having trouble with outliers and wanted to check samples}
 par(mar=c(8,5,2,2))
 boxplot(log10(assays(dds)[["cooks"]]), range=0, las=2)
 ```
+
 ```{r DESeq2 res df add gene symbols}
 #build table of additional gene symbols has the first column called "row"
 res_gene_names <- data.frame(row = res$row, 
@@ -164,6 +177,7 @@ ggsave(file = "/Users/jbrink/Gracz.sox9/20241010_USETHISFIG3_uninj_inj_volcano_L
         height= 8
 )
 ```
+
 ```{r data viz. all genes}
 #rownames(vs_counts) <- rowData(vsd)$gene_name as a reminder what vs_counts is
 select <- order(rowMeans(vs_counts), decreasing=TRUE)[1:30]
@@ -177,11 +191,11 @@ pheatmap(vs_counts[select,],
          cluster_cols=FALSE,
          annotation_col=df)
 ```
+
 ```{r filtering out non-sig genes from results before plotting}
 res_filt <- tidy_resShrink_no_mups[abs(tidy_resShrink_no_mups$log2FoldChange) > 4.0 & tidy_resShrink_no_mups$padj < 0.1, "symbol"]
 #res_filt <- tidy_resShrink[abs(tidy_resShrink$log2FoldChange) > 2.0, "symbol"]
 ```
-
 
 ```{r filtering out non-sig genes from results before plotting}
 # get mup genes and remove them 
@@ -209,6 +223,7 @@ plot_genes <- vs_counts[res_filt,]
 ```{r plotting specific gene counts}
 plotCounts(dds, gene= "ENSMUSG00000037852", intgroup = "Treatment")
 ```
+
 ```{r}
 # column annotations for pheatmap
 heat_annot <- coldata[, c("Treatment", "SampleID")]
@@ -222,6 +237,7 @@ pheatmap(plot_genes,
          annotation_col=heat_annot,
          scale = "row")
 ```
+
 ```{r trying other heatmaps for clustering analysis}
 mat <- vs_counts[res_filt,]
 mat <- mat - rowMeans(mat)
@@ -334,10 +350,45 @@ gsea_res <- GSEA(
   verbose = TRUE
 )
 ```
+
 ```{r}
 head(gsea_res@result)
-dotplot(gsea_res, showCategory = 15)
+boxplot(gsea_res, showCategory = 15)
 ```
+
 ```{r}
 gseaplot(gsea_res, geneSetID = "HALLMARK_IL6_JAK_STAT3_SIGNALING")
+```
+
+```{r}
+library(ggplot2)
+gsea_res_df <- gsea_res@result
+ggplot(gsea_res_df, aes(x = reorder(Description, NES), y = NES)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Pathway", y = "Normalized Enrichment Score (NES)", title = "GSEA Results")
+
+```
+
+```{r, make dfs of counts of genes across samples that are subsetted by GO term and plot heatmap of z-scored, vst counts}
+hallmark_inflam <- gsea_res@result[gsea_res@result$ID == "HALLMARK_INFLAMMATORY_RESPONSE" , ]
+inflam_genes <- unlist(strsplit(hallmark_inflam$core_enrichment[1], "/"))
+
+inflam_counts_matrix <- vs_counts[rownames(vs_counts) %in% inflam_genes, , drop = FALSE]
+inflam_counts_df <- as.data.frame(inflam_counts_matrix)
+rownames(inflam_counts_df) <- rownames(inflam_counts_matrix)
+scaled_inflam_counts <- t(scale(t(inflam_counts_df)))
+
+set.seed(123)
+png("heatmap_inflam_counts.png", width = 800, height = 800)
+pheatmap(scaled_inflam_counts, 
+                       cluster_rows = FALSE,  # Cluster genes
+                       cluster_cols = FALSE,  # Cluster samples
+                       scale = "row",  
+                       show_rownames = TRUE,
+                       show_colnames = FALSE,
+                       annotation_col = heat_annot,# Scale by row for better comparison
+                       main = "Heatmap of VST Counts for Inflammatory Genes")
+dev.off()
 ```
