@@ -24,6 +24,7 @@ load("~/Downloads/peak_counts.RData")
 load("~/Downloads/peak_counts.RData")
 peak_counts$bam.files
 ms_values <- gsub(".*_(Ms[0-9]+).*", "\\1", peak_counts$bam.files)
+ms_values
 ```
 
 ```{r}
@@ -68,7 +69,7 @@ meta_cols <- c("annotation", "SYMBOL")
 scaled_counts_meta_merge <- cbind(peak_meta[, meta_cols], vst_counts_atac)
 
 scaled_counts_meta_merge[, "annotation_summary"] <- str_split_i(scaled_counts_meta_merge$annotation, " ", 1)
-to_heat <- scaled_counts_meta_merge[order(res_atac$padj)[0:300], ]
+to_heat <- scaled_counts_meta_merge[order(res_atac$padj)[0:500], ]
 
 scaled_counts_meta_merge
 peak_meta
@@ -86,16 +87,57 @@ Heatmap(
 ht
 dev.off()
 ```
+
 ```{r}
-#plot most DAR counts across conditions but this doesnt really help on a global scale
-library(EnhancedVolcano)
+set.seed(123)
+pheatmap(as.matrix(to_heat[, 4:ncol(to_heat)-1]),
+         cluster_rows = TRUE,       
+         cluster_cols = TRUE,           
+         scale = "row",
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         main = "Heatmap of Significant DARs")
+as.matrix(to_heat[, 4:ncol(to_heat)-1])
+```
+
+```{r}
 res_atac_df <- as.data.frame(res_atac)
 res_atac_df
 
 res_atac_peaks <- cbind(res_atac_df, peak_meta)
 
-EnhancedVolcano(res_atac_peaks,
-                lab = res_atac_peaks$SYMBOL,
+# Filter for significant differential accessibility (padj < 0.05, |log2FoldChange| > 1)
+significant_dars <- res_atac_peaks %>%
+  filter(padj < 0.05, abs(log2FoldChange) > 1)
+
+significant_dars <- significant_dars %>%
+  mutate(X1 = paste0("chr", X1))
+
+significant_dars <- na.omit(significant_dars)
+
+# Save the modified BED file
+write_delim(dar_bed, "significant_dars_corrected.bed", delim = "\t", col_names = FALSE)
+
+# Save to BED format for input to TOBIAS (chrom, start, end columns only)
+write.table(significant_dars[, c("geneChr", "geneStart", "geneEnd")],
+            file = "significant_dars.bed", sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+dar_bed <- read_delim("significant_dars.bed", delim = "\t", col_names = FALSE)
+
+dar_bed <- dar_bed %>%
+  mutate(X1 = paste0("chr", X1))
+
+dar_bed_filtered <- dar_bed %>%
+  filter(X1 != "chr20")
+
+write_delim(dar_bed_filtered, "significant_dars_corrected_filtered.bed", delim = "\t", col_names = FALSE)
+dar_bed
+```
+
+```{r}
+#plot most DAR counts across conditions but this doesnt really help on a global scale
+library(EnhancedVolcano)
+EnhancedVolcano(significant_dars,
+                lab = significant_dars$SYMBOL,
                 x = "log2FoldChange",
                 y = "padj"
                 )
@@ -111,9 +153,5 @@ distal_intergenic_matrix <- res_atac_peaks[res_atac_peaks$annotation == "Distal 
 distal_matrix_filt <- distal_intergenic_matrix[abs(distal_intergenic_matrix$log2FoldChange)> 4, ]
 distal_matrix_map <- as.numeric(distal_matrix_filt, nrow = 1)
 distal_matrix_filt <- na.omit(distal_matrix_filt)
-
-str(distal_matrix_map)
-pheatmap(distal_matrix_map,
-         scale = "rows")
-
 ```
+
