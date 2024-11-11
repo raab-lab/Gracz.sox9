@@ -7,6 +7,7 @@ library(stringr)
 library(ChIPseeker)
 library(TxDb.Mmusculus.UCSC.mm10.knownGene)
 ```
+
 ```{r}
 merged_bed <- read.table("~/Downloads/union_uninj_inj_atac.bed", header = FALSE)
 #granges <- GRanges(seqnames=merged_bed$V1, ranges=IRanges(start=merged_bed$V2, end=merged_bed$V3))
@@ -21,11 +22,15 @@ load("~/Downloads/peak_counts.RData")
 
 #peak_counts
 load("~/Downloads/peak_counts.RData")
-peak_counts
+peak_counts$bam.files
+ms_values <- gsub(".*_(Ms[0-9]+).*", "\\1", peak_counts$bam.files)
 ```
+
 ```{r}
 assayNames(peak_counts)
 count_matrix <- assay(peak_counts)
+colnames(count_matrix) <- ms_values
+count_matrix
 ```
 
 ```{r}
@@ -34,15 +39,17 @@ sample_info <- data.frame(row.names = colnames(count_matrix),
                           batch = c("B","B", "A", "A", "A", "B", "A", "A") 
 )
 colnames(count_matrix) <- rownames(sample_info)
+sample_info
 ```
 
 ```{r}
 dds_atac <- DESeqDataSetFromMatrix(countData = count_matrix, 
                                    colData = sample_info, 
-                                   design = ~ condition + batch
+                                   design = ~ batch + condition
 )
 dds_atac$condition <- relevel(dds_atac$condition, ref = "uninjured")
 des_atac <- DESeq(dds_atac)
+results(des_atac)
 ```
 
 ```{r}
@@ -51,6 +58,7 @@ peak_annotation <- annotatePeak(granges,
                                 TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
                                 annoDb = "org.Mm.eg.db"
 )
+res_atac
 ```
 
 ```{r}
@@ -58,21 +66,54 @@ peak_meta <- mcols(peak_annotation@anno)
 vst_counts_atac <- assay(vst(dds_atac))
 meta_cols <- c("annotation", "SYMBOL")
 scaled_counts_meta_merge <- cbind(peak_meta[, meta_cols], vst_counts_atac)
-atac_res <- results(des_atac)
 
 scaled_counts_meta_merge[, "annotation_summary"] <- str_split_i(scaled_counts_meta_merge$annotation, " ", 1)
-to_heat <- scaled_counts_meta_merge[order(atac_res$padj)[0:300], ]
-```
+to_heat <- scaled_counts_meta_merge[order(res_atac$padj)[0:300], ]
 
+scaled_counts_meta_merge
+peak_meta
+```
 
 ```{r}
 #annotation_row = to_heat[c("SYMBOL", "annotation_summary")],
 #annotation_col = colData(des_atac)
 
-ht = Heatmap(
+Heatmap(
     as.matrix(to_heat[, 4:ncol(to_heat)-1]),
     name = "atac dar"
   )
 
 ht
+dev.off()
+```
+```{r}
+#plot most DAR counts across conditions but this doesnt really help on a global scale
+library(EnhancedVolcano)
+res_atac_df <- as.data.frame(res_atac)
+res_atac_df
+
+res_atac_peaks <- cbind(res_atac_df, peak_meta)
+
+EnhancedVolcano(res_atac_peaks,
+                lab = res_atac_peaks$SYMBOL,
+                x = "log2FoldChange",
+                y = "padj"
+                )
+```
+
+```{r}
+#make 3 heatmaps of lfc + padj in distal intergenic, Promoter (<=1kb), Promoter (1-2kb) with symbol = row. so i need to subset the 
+res_atac_peaks
+library(ComplexHeatmap)
+
+# Filter for rows with "Distal Intergenic" in the annotation column
+distal_intergenic_matrix <- res_atac_peaks[res_atac_peaks$annotation == "Distal Intergenic", c("log2FoldChange", "padj", "SYMBOL")]
+distal_matrix_filt <- distal_intergenic_matrix[abs(distal_intergenic_matrix$log2FoldChange)> 4, ]
+distal_matrix_map <- as.numeric(distal_matrix_filt, nrow = 1)
+distal_matrix_filt <- na.omit(distal_matrix_filt)
+
+str(distal_matrix_map)
+pheatmap(distal_matrix_map,
+         scale = "rows")
+
 ```
