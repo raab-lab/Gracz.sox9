@@ -1,0 +1,83 @@
+---
+title: "GSEA_DEG_Fig3"
+output: html_document
+date: "2024-11-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages}
+library(msigdbr)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(stringr)
+library(plyranges)
+library(tidyverse)
+library(rlang)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r read in dataframe of DEG list and clean up}
+rna_deg_df <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/20240903_uninj_inj_DEG_LFCshrink.csv")
+as.data.frame(rna_deg_df)
+
+clean_deg_df <- rna_deg_df[!grepl("Gm|Rik$|Mup$", rna_deg_df$symbol), ] #filter Gm and Rik genes
+
+clean_deg_df <- na.omit(clean_deg_df) #rm NAs
+clean_deg_df
+```
+
+```{r get TNFA_NFKB gsea geneset overlaps with deg df and write to a csv}
+# Retrieve the HALLMARK_TNFA_SIGNALING_VIA_NFKB gene set for mice
+hallmark_genes_df <- msigdbr(species = "Mus musculus", 
+                             category = "H"
+)
+nfkb_genes <- hallmark_genes_df %>%
+  filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
+  pull(gene_symbol)  # Get only the gene symbols
+
+clean_deg_df <- clean_deg_df[clean_deg_df$symbol %in% nfkb_genes, ]
+clean_deg_df <- clean_deg_df
+
+write.csv(clean_deg_df,"/Users/jbrink/Gracz.sox9/20241122_nfkb_deg_all.csv")
+```
+
+
+```{r get TNFA_NFKB gsea genes from counts and plot heatmap}
+rna_counts <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20240918_uninj_inj_counts.csv")
+nkfb_counts <- rna_counts[rna_counts$X %in% nfkb_genes, ]
+
+gene_of_interest <- "Sox9"
+sox9_counts <- rna_counts[rna_counts$X == gene_of_interest, ]
+
+df_long <- sox9_counts %>%
+  pivot_longer(
+    cols = starts_with("X1"),
+    names_to = "sample",
+    values_to = "count"
+  ) %>%
+  mutate(
+    group = ifelse(grepl("chow", sample), "Control", "DDC") # Adjust based on actual naming convention
+  )
+
+sox9_count<- ggplot(df_long, aes(x = group, y = count)) +
+              geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+              geom_jitter(aes(color = "black"), width = 0.2, size = 2) +
+              labs(
+                title = paste("Sox9 Variance Stabilized Counts"),
+                x = "Group",
+                y = "Count"
+              ) +
+              theme_minimal() +
+              theme(legend.position = "none")
+
+ggsave(file = "sox9_counts_boxplot.svg",
+       plot = sox9_count,
+       width = 10,
+       height = 8
+       )
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
