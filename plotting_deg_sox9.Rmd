@@ -59,12 +59,12 @@ df_long <- sox9_counts %>%
     values_to = "count"
   ) %>%
   mutate(
-    group = ifelse(grepl("chow", sample), "Control", "DDC") # Adjust based on actual naming convention
+    group = ifelse(grepl("chow", sample), "Control", "DDC") # Adjusted based on actual naming convention
   )
 
 sox9_count<- ggplot(df_long, aes(x = group, y = count)) +
               geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-              geom_jitter(aes(color = "black"), width = 0.2, size = 2) +
+              geom_jitter(aes(width = 0.2, size = 2)) +
               labs(
                 title = paste("Sox9 Variance Stabilized Counts"),
                 x = "Group",
@@ -78,6 +78,8 @@ ggsave(file = "sox9_counts_boxplot.svg",
        width = 10,
        height = 8
        )
+
+dev.off()
 ```
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
