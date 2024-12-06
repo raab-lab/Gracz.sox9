@@ -1,0 +1,367 @@
+---
+title: "overlap_sox9_nfkb_atac"
+output: html_document
+date: "2024-12-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(dplyr)
+library(ChIPseeker)
+library(ChIPpeakAnno)
+library(tidyverse)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(AnnotationDbi)
+library(org.Mm.eg.db)
+```
+
+```{r read in bed files and make granges object}
+sox9_inj <- read_delim("~/Downloads/SOX9_MA0077.1_Injured_footprints_bound.bed", 
+                       delim = "\t", 
+                       col_names = FALSE)
+
+colnames(sox9_inj) <- c("tfbs_chr", "tfbs_start", "tfbs_end", "tf", 
+                        "LFC", "strand", "seqnames", "start", "end", "lfc")
+# Reorder columns
+sox9_inj <- sox9_inj[, c("seqnames", "start", "end", "lfc", 
+                         names(sox9_inj)[!names(sox9_inj) %in% c("seqnames", "start", "end", "lfc")])]
+
+sox9_inj <- toGRanges(sox9_inj)
+
+sox9_inj
+```
+
+```{r}
+sox9_ctrl <- read_delim("~/Downloads/SOX9_MA0077.1_Uninjured_footprints_bound.bed",
+                        delim = "\t",
+                        col_names = FALSE)
+
+colnames(sox9_ctrl) <- c("tfbs_chr", "tfbs_start", "tfbs_end", "tf", 
+                        "LFC", "strand", "seqnames", "start", "end", "lfc")
+#reorder cols
+sox9_ctrl <- sox9_ctrl[, c("seqnames", "start", "end", "lfc", 
+                         names(sox9_ctrl)[!names(sox9_ctrl) %in% c("seqnames", "start", "end", "lfc")])]
+
+sox9_ctrl <- toGRanges(sox9_ctrl)
+sox9_ctrl
+```
+
+```{r annotate the gRanges obj}
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+
+peak_anno <- annotatePeak(sox9_inj, 
+                          TxDb = txdb, 
+                          tssRegion = c(-3000, 3000),
+                          annoDb = "org.Mm.eg.db")
+
+anno_inj_df <- as.data.frame(peak_anno)
+
+write.table(anno_inj_df, "annotated_sox9_tfbs_inj.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+anno_inj_clean <- anno_inj_df[!grepl("Gm|Rik$", anno_inj_df$SYMBOL), ]
+
+proms_inj <- make.unique(anno_inj_clean$SYMBOL)
+
+proms_inj
+```
+
+```{r annotate the gRanges obj for control}
+ctrl_peak_anno <- annotatePeak(sox9_ctrl,
+                               TxDb = txdb,
+                               annoDb = "org.Mm.eg.db")
+anno_ctrl_df <- as.data.frame(ctrl_peak_anno)
+anno_ctrl_clean <- anno_ctrl_df[!grepl("Gm|Rik$", anno_ctrl_df$SYMBOL), ]
+proms_ctrl <- make.unique(anno_ctrl_clean$SYMBOL)
+
+proms_ctrl
+```
+
+```{r load DEG list, echo=FALSE}
+rna_deg_df <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/20240903_uninj_inj_DEG_LFCshrink.csv")
+as.data.frame(rna_deg_df)
+
+clean_deg_df <- rna_deg_df[!grepl("Gm|Rik$|Mup$", rna_deg_df$symbol), ] #filter Gm and Rik genes
+clean_deg_df <- na.omit(clean_deg_df)#rm NAs
+
+deg_proms_inj <- clean_deg_df[clean_deg_df$symbol %in% proms_inj, ]
+deg_proms_inj
+
+deg_proms_ctrl <- clean_deg_df[clean_deg_df$symbol %in% proms_ctrl, ]
+deg_proms_ctrl
+
+proms_inj_unique <- setdiff(proms_inj, proms_ctrl)
+proms_inj_unique
+
+overlap <- intersect(proms_inj_unique, rela_genes)
+
+deg_proms_rela <- clean_deg_df[clean_deg_df$symbol %in% proms_rela, ]
+
+
+deg_inter <- clean_deg_df[clean_deg_df$symbol %in% overlap, ]
+deg_inter
+
+deg_proms_inter <- clean_deg_df[clean_deg_df$symbol %in% rela_sox9, ]
+deg_proms_inter
+write.table(deg_proms_inj, "sox9_tfbs_inj_promoter_deg.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+```{r find unique and overlapping genes in each gene set}
+library(ggvenn)
+# Define the two gene sets
+injured_genes <- deg_proms_inj$symbol
+control_genes <- deg_proms_ctrl$symbol
+
+rela_genes <- deg_proms_rela$symbol
+
+# Define the two gene sets as a named list
+gene_sets <- list(SOX9_injured = injured_genes, RELA_injured = rela_genes)
+
+# Plot the Venn diagram
+ggvenn(
+  gene_sets,
+  fill_color = c("blue", "red"),
+  stroke_size = 0.5,
+  set_name_size = 4
+)
+
+deg_proms_rela
+```
+
+```{r scatter plot predicted rela/sox9 binding of Deseq2 GE stats}
+# Filter significant genes for labeling (e.g., padj < 0.05)
+labeled_genes <- deg_inter[deg_inter$padj < 0.05, ]
+
+# Create ggplot
+ggplot(deg_inter, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(alpha = 0.4, color = "blue") + # Scatter plot points
+  geom_text(
+    data = labeled_genes, # Data for labeling
+    aes(label = symbol), 
+    vjust = 1, hjust = 1, size = 3, color = "black"
+  ) + 
+  theme_minimal() + 
+  labs(
+    title = "Gene Expression Statistics for RELA & unique SOX9-Predicted Promoter Binding",
+    x = "Log2 Fold Change",
+    y = "-log10(padj)"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+```{r}
+library(EnhancedVolcano)
+
+EnhancedVolcano(deg_inj_unique,
+                lab = deg_inj_unique$symbol,
+                x = 'log2FoldChange',
+                y = 'pvalue',
+                title = "Gene Expression Statistics for Sox9-Predicted Promoter Binding in Injured",
+                pointSize = 3.0,
+                labSize = 6.0
+)
+
+ggsave(file = "/Users/jbrink/Gracz.sox9/20241204_volcano_sox9binding_unique_inj_deg.svg",
+        width= 10,
+        height= 8
+)
+```
+
+
+```{r viz sox9 binding in control}
+ctrl_peak_anno <- annotatePeak(sox9_ctrl, 
+                          TxDb = txdb, 
+                          genomicAnnotationPriority = c("Promoter", "5UTR", "3UTR", "Exon", "Intron", "Downstream", "Intergenic"),
+                          annoDb = "org.Mm.eg.db")
+
+annotated_sox9_ctrl <- as.data.frame(ctrl_peak_anno)
+
+write.table(annotated_sox9_ctrl, "annotated_sox9_tfbs_ctrl.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+anno_sox9_ctrl_clean <- annotated_sox9_ctrl[!grepl("Gm|Rik$", annotated_sox9_ctrl$SYMBOL), ]
+
+anno_sox9_ctrl_clean
+```
+
+```{r}
+promoter_genes_ctrl <- make.unique(anno_sox9_ctrl_clean$SYMBOL)
+subset_deg_ctrl <- clean_deg_df[clean_deg_df$symbol %in% promoter_genes_ctrl, ]
+
+
+sox9_unj_inj_genes <- intersect(subset_deg$symbol, subset_deg_ctrl$symbol)
+subset_deg_ctrl <- clean_deg_df[clean_deg_df$symbol %in% sox9_unj_inj_genes, ]
+```
+
+```{r}
+proms_ctrl_unique <- setdiff(promoter_genes_ctrl, promoter_genes)
+
+deg_ctrl_unique <- clean_deg_df[clean_deg_df$symbol %in% proms_ctrl_unique, ]
+
+proms_inj_unique <- setdiff(promoter_genes, promoter_genes_ctrl)
+
+deg_inj_unique <- clean_deg_df[clean_deg_df$symbol %in% proms_inj_unique, ]
+
+promoter_genes_ctrl
+
+
+
+```
+
+```{r}
+library(ggvenn)
+# Define the two gene sets
+injured_genes <- subset_deg$symbol
+control_genes <- subset_deg_ctrl$symbol
+
+
+# Create Venn diagram
+venn.plot <- venn.diagram(
+  x = list(Injured = injured_genes, Control = control_genes),
+  filename = NULL,  # Prevent saving to file
+  fill = c("blue", "red"),
+  alpha = 0.5,
+  cex = 2,
+  cat.cex = 2,
+  cat.pos = c(-20, 20),
+  main = "Overlap Between Injured and Control Genes"
+)
+
+# Display Venn diagram
+grid.draw(venn.plot)
+
+```
+
+```{r}
+# Filter significant genes for labeling (e.g., padj < 0.05)
+labeled_genes <- deg_inj_unique[subset_deg$padj < 0.05, ]
+
+# Create ggplot
+ggplot(deg_inj_unique, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(alpha = 0.4, color = "blue") + # Scatter plot points
+  geom_text(
+    data = labeled_genes, # Data for labeling
+    aes(label = symbol), 
+    vjust = 1, hjust = 1, size = 3, color = "black"
+  ) + 
+  theme_minimal() + 
+  labs(
+    title = "Gene Expression Statistics for Sox9-Predicted Promoter Inj Binding",
+    x = "Log2 Fold Change",
+    y = "-log10(padj)"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+```{r}
+library(GenomicRanges)
+
+# Function to read a BED-like file into a GRanges object
+read_file_into_grange <- function(file_path) {
+    print(paste("Reading file:", file_path))  # Debugging
+    data <- read.delim(file_path, header = FALSE)
+    print(head(data))  # Inspect the first few rows
+    print(typeof(data))  # Check the type of the object
+    print(colnames(data))  # Check column names
+    colnames(data) <- c("tfbs_chr", "tfbs_start", "tfbs_end", "tf", 
+                        "LFC", "strand", "seqnames", "start", "end", "lfc") 
+    
+    print(colnames(data))  # Verify column renaming
+    GRanges(seqnames = data$seqnames,
+            ranges = IRanges(start = data$start, end = data$end),
+            strand = data$strand,
+            tf = data$tf)
+    mcols(data)
+}
+
+# Function to find intersections with SOX9 GRanges
+find_intersect_with_sox9 <- function(grange, sox9_inj) {
+  GenomicRanges::intersect(grange, sox9_inj, ignore.strand = TRUE)
+}
+
+# Main pipeline
+process_non_sox9_files <- function(non_sox9_files, sox9_inj) {
+  # Read each non-SOX9 file into GRanges
+  grange_list <- lapply(non_sox9_files, read_file_into_grange)
+  
+  # Find intersections with SOX9 GRanges
+  intersect_list <- lapply(grange_list, find_intersect_with_sox9, sox9_inj = sox9_inj)
+  
+  return(intersect_list)
+}
+
+# Example usage
+# List all non-SOX9 file paths (adjust the path and pattern as necessary)
+non_sox9_files <- list.files(path = "/Users/jbrink/Gracz.sox9", pattern = ".*_Injured_.*_bound\\.bed$", full.names = TRUE)
+
+read_file
+
+# Process files and find intersections
+intersections <- process_non_sox9_files(non_sox9_files, sox9_inj)
+
+# Inspect results
+print(intersections)
+```
+
+```{r backing up and just comparing rela to sox9 injured binding}
+rela_inj <- read_delim("~/Downloads/RELA_MA0107.1_Injured_footprints_bound.bed",
+                        delim = "\t",
+                        col_names = FALSE)
+
+colnames(rela_inj) <- c("tfbs_chr", "tfbs_start", "tfbs_end", "tf", 
+                        "LFC", "strand", "seqnames", "start", "end", "lfc")
+#reorder cols
+rela_inj <- rela_inj[, c("seqnames", "start", "end", "lfc", 
+                         setdiff(names(rela_inj), c("seqnames", "start", "end", "lfc")))]
+
+
+rela_inj <- toGRanges(rela_inj)
+
+rela_inj <- annotatePeak(rela_inj, 
+                                    TxDb = txdb, 
+                                    tssRegion = c(-3000, 3000), 
+                                    annoDb = "org.Mm.eg.db")
+
+rela_inj_df <- as.data.frame(rela_inj)
+rela_inj_clean <- rela_inj_df[!grepl("Gm|Rik$", rela_inj_df$SYMBOL), ]
+proms_rela <- make.unique(rela_inj_clean$SYMBOL)
+
+
+sox9_rela_range <- GenomicRanges::intersect(rela_inj, sox9_inj, ignore.strand = TRUE)
+annotated_intersect <- annotatePeak(sox9_rela_range, 
+                                    TxDb = txdb, 
+                                    tssRegion = c(-3000, 3000), 
+                                    annoDb = "org.Mm.eg.db")
+
+dim(rela_inj_df)
+```
+
+```{r}
+sox9_genes <- subset_deg$symbol
+control_genes <- subset_deg_ctrl$symbol
+
+# Create Venn diagram
+venn.plot <- venn.diagram(
+  x = list(Injured = injured_genes, Control = control_genes),
+  filename = NULL,  # Prevent saving to file
+  fill = c("blue", "red"),
+  alpha = 0.5,
+  cex = 2,
+  cat.cex = 2,
+  cat.pos = c(-20, 20),
+  main = "Overlap Between Injured and Control Genes"
+)
+
+# Display Venn diagram
+grid.draw(venn.plot)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

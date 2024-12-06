@@ -55,11 +55,14 @@ results(des_atac)
 
 ```{r}
 res_atac <- results(des_atac)
+res_atac <- lfcShrink(des_atac, 
+                      coef = "condition_injured_vs_uninjured", 
+                      type = "apeglm"
+)
 peak_annotation <- annotatePeak(granges, 
                                 TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
                                 annoDb = "org.Mm.eg.db"
 )
-res_atac
 ```
 
 ```{r}
@@ -67,25 +70,70 @@ peak_meta <- mcols(peak_annotation@anno)
 vst_counts_atac <- assay(vst(dds_atac))
 meta_cols <- c("annotation", "SYMBOL")
 scaled_counts_meta_merge <- cbind(peak_meta[, meta_cols], vst_counts_atac)
+# Filter out rows where SYMBOL starts with "Gm" or ends with "Rik"
+scaled_counts_meta_merge <- scaled_counts_meta_merge[!grepl("^Gm|Rik$", scaled_counts_meta_merge$SYMBOL), ]
+
 
 scaled_counts_meta_merge[, "annotation_summary"] <- str_split_i(scaled_counts_meta_merge$annotation, " ", 1)
-to_heat <- scaled_counts_meta_merge[order(res_atac$padj)[0:500], ]
+
+to_heat <- scaled_counts_meta_merge[order(significant_dars$padj)[0:300], ]
+to_heat <- scaled_counts_meta_merge[order(significant_dars$log2FoldChange)]
 
 scaled_counts_meta_merge
 peak_meta
+to_heat
 ```
 
 ```{r}
 #annotation_row = to_heat[c("SYMBOL", "annotation_summary")],
 #annotation_col = colData(des_atac)
-
 Heatmap(
     as.matrix(to_heat[, 4:ncol(to_heat)-1]),
-    name = "atac dar"
+    name = "DAR"
   )
 
 ht
 dev.off()
+```
+
+```{r}
+# Load necessary libraries
+library(ComplexHeatmap)
+
+# Convert to a standard data frame for easier manipulation
+df <- as.data.frame(to_heat)
+
+# Make SYMBOL column unique by appending suffixes to duplicates
+df$SYMBOL <- make.unique(df$SYMBOL)
+
+# Get unique annotation_summary groups
+annotation_groups <- unique(df$annotation_summary)
+
+# Loop through each group and draw its heatmap individually
+for (group in annotation_groups) {
+  # Subset data for each annotation_summary group
+  df_subset <- df[df$annotation_summary == group, ]
+  
+  # Set row names to the unique SYMBOL column
+  rownames(df_subset) <- df_subset$SYMBOL
+  
+  # Select only the columns starting with "Ms"
+  df_subset_counts <- df_subset[, grep("^Ms", colnames(df_subset))]
+  df_subset_counts_scaled <- t(scale(t(df_subset_counts)))
+  
+  # Create and draw a heatmap for each group
+  heatmap <- Heatmap(as.matrix(df_subset_counts_scaled),
+                     name = paste0("Counts_", group),
+                     show_row_names = FALSE,
+                     show_column_names = TRUE,
+                     cluster_rows = TRUE,
+                     cluster_columns = TRUE,
+                     column_title = group)
+  
+  # Draw the heatmap for each group separately
+  draw(heatmap)
+}
+df_subset_counts
 ```
 
 ```{r}
@@ -96,24 +144,35 @@ pheatmap(as.matrix(to_heat[, 4:ncol(to_heat)-1]),
          scale = "row",
          color = colorRampPalette(c("blue", "white", "red"))(50),
          main = "Heatmap of Significant DARs")
-as.matrix(to_heat[, 4:ncol(to_heat)-1])
+
 ```
 
-```{r}
+```{r cleaning up the res}
 res_atac_df <- as.data.frame(res_atac)
 res_atac_df
 
 res_atac_peaks <- cbind(res_atac_df, peak_meta)
+res_atac_peaks[, "annotation_summary"] <- str_split_i(res_atac_peaks$annotation, " ", 1)
+res_atac_peaks
+```
 
+```{r cleaning up the res}
 # Filter for significant differential accessibility (padj < 0.05, |log2FoldChange| > 1)
 significant_dars <- res_atac_peaks %>%
   filter(padj < 0.05, abs(log2FoldChange) > 1)
 
-significant_dars <- significant_dars %>%
-  mutate(X1 = paste0("chr", X1))
-
 significant_dars <- na.omit(significant_dars)
 
+significant_dars_unique <- significant_dars %>%
+  mutate(X1 = paste0("chr", X1))
+
+# Filter out rows where SYMBOL starts with "Gm" or ends with "Rik"
+significant_dars <- significant_dars[!grepl("^Gm|Rik$", significant_dars$SYMBOL), ]
+
+head(significant_dars)
+```
+
+```{r}
 # Save the modified BED file
 write_delim(dar_bed, "significant_dars_corrected.bed", delim = "\t", col_names = FALSE)
 
@@ -130,28 +189,145 @@ dar_bed_filtered <- dar_bed %>%
   filter(X1 != "chr20")
 
 write_delim(dar_bed_filtered, "significant_dars_corrected_filtered.bed", delim = "\t", col_names = FALSE)
-dar_bed
 ```
 
 ```{r}
-#plot most DAR counts across conditions but this doesnt really help on a global scale
-library(EnhancedVolcano)
-EnhancedVolcano(significant_dars,
-                lab = significant_dars$SYMBOL,
-                x = "log2FoldChange",
-                y = "padj"
-                )
-```
-
-```{r}
-#make 3 heatmaps of lfc + padj in distal intergenic, Promoter (<=1kb), Promoter (1-2kb) with symbol = row. so i need to subset the 
-res_atac_peaks
+#make 3 heatmaps of counts of NFKB in distal, Promoter  with symbol = row. 
 library(ComplexHeatmap)
+library(msigdbr)
+
+# Retrieve the HALLMARK_TNFA_SIGNALING_VIA_NFKB gene set for mice
+hallmark_genes_df <- msigdbr(species = "Mus musculus", category = "H")
+tnfa_genes <- hallmark_genes_df %>%
+  filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
+  pull(gene_symbol)  # Get only the gene symbols
 
 # Filter for rows with "Distal Intergenic" in the annotation column
-distal_intergenic_matrix <- res_atac_peaks[res_atac_peaks$annotation == "Distal Intergenic", c("log2FoldChange", "padj", "SYMBOL")]
-distal_matrix_filt <- distal_intergenic_matrix[abs(distal_intergenic_matrix$log2FoldChange)> 4, ]
-distal_matrix_map <- as.numeric(distal_matrix_filt, nrow = 1)
-distal_matrix_filt <- na.omit(distal_matrix_filt)
+prom_matrix <- scaled_counts_meta_merge[scaled_counts_meta_merge$annotation_summary == "Promoter", c("Ms1153", "Ms1154", "Ms1373", "Ms1176", "Ms1607","Ms1638", "Ms1710", "Ms1724", "SYMBOL")]
+
+gsea_prom_ct <- prom_matrix[prom_matrix$SYMBOL %in% tnfa_genes, ]
+
+#has to be unique gene symbol to get to rownames so i can plot heatmap
+gsea_prom_ct$SYMBOL <- make.unique(gsea_prom_ct$SYMBOL)
+rownames(gsea_prom_ct) <- gsea_prom_ct$SYMBOL
+
+gsea_prom_numeric <- gsea_prom_ct[, sapply(gsea_prom_ct, is.numeric)]
+
+gsea_prom_numeric <- t(scale(t(gsea_prom_numeric)))
+
+# Create a heatmap
+Heatmap(gsea_prom_numeric,
+        name = "Z-score",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 10),
+        show_row_names = FALSE,
+        show_column_names = TRUE)
+intersect <- intersect(rownames(gsea_prom_numeric), colnames(gsea_prom_res$SYMBOL))
+gsea_prom_res$SYMBOL
+```
+
+```{r}
+promoter_df <- significant_dars[significant_dars$annotation_summary == "Promoter", c("log2FoldChange", "padj", "SYMBOL")]
+gsea_prom_res <- promoter_df %>% filter(SYMBOL %in% tnfa_genes)
+gsea_prom_res$SYMBOL <- make.unique(gsea_prom_res$SYMBOL)
+
+gsea_prom_mat <- gsea_prom_res %>%
+  as.matrix()
+rownames(gsea_prom_mat) <- gsea_prom_res$SYMBOL
+
+gsea_distal_mat$log2FoldChange_scaled <- scales::rescale(gsea_distal_mat$log2FoldChange)
+
+
+distal_mat <- as.matrix(gsea_distal_mat$log2FoldChange_scaled)
+rownames(distal_mat) <- gsea_distal_mat$SYMBOL
+
+gsea_prom_mat$log2FoldChange_scaled <- as.numeric(trimws(gsea_distal_mat$log2FoldChange))
+gsea_prom_mat$padj <- as.numeric(trimws(gsea_prom_mat$padj))
+
+dist_ht<- Heatmap(distal_mat,
+                  name = "scaled LFC",
+                  row_names_gp = gpar(fontsize = 10),
+                  column_names_gp = gpar(fontsize = 10),
+                  show_row_names = TRUE,
+                  show_column_names = FALSE)
+  
+dim(distal_mat)
+```
+
+```{r}
+scatter_atac_nfkb<- 
+  ggplot(gsea_prom_mat, aes(x = log2FoldChange, y = -log10(padj))) +
+                          geom_point(size = 2) +  # Shrink the point size
+                          geom_text(aes(label = SYMBOL), 
+                                    vjust = 1.5, hjust = 1.5, size = 3, 
+                                    position = position_jitter(width = 0.1, height = 0.1)) +  # Scatter the labels
+                          theme_minimal() +
+                          labs(x = "log2 Fold Change", y = "-log10(padj)", title = "Scatter Plot of Significantly Open Promoter Regions") +
+                          theme(legend.position = "none")
+
+ ggsave(file = "GSEA_NFkb_distal_Atac_UninjDdc.svg",
+        plot= scatter_atac_nfkb,
+        width= 10,
+        height= 8)
+gsea_prom_mat
+```
+
+
+```{r}
+common_genes <- intersect(rownames(prom_heat), rownames(distal_heat))
+prom_common <- prom_heat[common_genes, , drop = FALSE]
+distal_common <- distal_heat[common_genes, , drop = FALSE]
+head(distal_common)
+
+prom_common <- as.data.frame(prom_common)
+prom_common$log2FoldChange_scaled <- scales::rescale(prom_common$log2FoldChange, to = c(-1,1))
+prom_common$log2FoldChange <- NULL
+
+prom_ht <- Heatmap(as.matrix(prom_common),
+          name = "scaled LFC",
+          row_names_gp = gpar(fontsize = 10),
+          column_names_gp = gpar(fontsize = 10),
+          column_title = "Promoter",
+          show_row_names = TRUE,
+          show_column_names = FALSE)
+
+distal_ht <- Heatmap(as.matrix(distal_common),
+                  name = "scaled LFC",
+                  row_names_gp = gpar(fontsize = 10),
+                  column_names_gp = gpar(fontsize = 10),
+                  show_row_names = TRUE,
+                  column_title = "Distal",
+                  show_column_names = FALSE)
+
+
+distal_ht + prom_ht
+
+foo <- cbind(distal_common, prom_common)
+colnames(foo) <- c("Distal", "Promoter")
+
+library(circlize)
+col_fun = colorRamp2(c(-2, 0, 4), c("blue", "white", "red"))
+lgd = Legend(col_fun = col_fun, title = "Log2FoldChange")
+
+Heatmap(
+  as.matrix(foo),
+  show_column_names = TRUE,
+  column_names_side = "top",
+  column_names_rot = 0,
+  column_names_centered = TRUE,
+  column_names_gp = gpar(fontsize = 15),
+  col = col_fun,
+  name = 'log2FoldChange',
+  cluster_columns = FALSE,
+)
+```
+
+```{r}
+pheatmap(gsea_distal_numeric, scale = "row", cluster_rows = TRUE, cluster_cols = TRUE)
+# Check for NaN values
+any(is.na(prom_heat))
+
+# Check for Inf values
+any(is.infinite(prom_heat))
 ```
 
