@@ -1,0 +1,152 @@
+---
+title: "rna_gfp"
+output: html_notebook
+date: 2024.12.12
+---
+##load libraries, read in the sample sheet, assign quant files to obj, construct metadata  
+
+```{r load lib}
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(DESeq2)
+library(tximeta)
+library(vsn)
+```
+#need to point to the dir then read in csv with sample metadata from alignment run. then i need to constuct coldata from metadata in sample info csv by assigning to new obj, then adding cols to coldata by converting df cols to character vectors and concatenating to new df/coldata (adding col data)
+```{r load data, construct coldata}
+quants_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/rna_egfp/quants"
+samp_info <- read.csv("/Users/jbrink/Desktop/20241215_RNAsamplesheetegfp.csv", header = TRUE)
+
+coldata <- samp_info
+
+coldata$names <- paste("1",
+                      coldata$SampleID,
+                      coldata$Cell.Line,
+                      coldata$Treatment,
+                      coldata$Replicate,
+                      #coldata$Batch,
+                      sep = "_"
+)
+
+coldata$files <- file.path(quants_dir, coldata$names, "quant.sf")
+
+coldata <- coldata[-c(11, 12, 13), ] #c function returns a vector 
+
+coldata$files
+```
+#next i need to import salmon-generated transcript counts (TPM) and generate a summarized experiment of the counts summarized to gene-level. will also add geneIds
+```{r generate summarized experiment and perform some EDA}
+sum_exp <- tximeta(coldata)
+sum_gene <- summarizeToGene(sum_exp, assignRanges = "abundant")
+dds <- DESeqDataSet(sum_gene, design = ~Batch + Treatment)
+
+vsd <- vst(dds)
+rownames(vsd)
+
+plotPCA(vsd, intgroup = c("Treatment", "Batch"))
+```
+
+```{r generate summarized experiment and perform some EDA}
+#need to do further EDA to see what is driving the effect 
+sox9 <- plotCounts(dds, gene = "ENSMUSG00000000567", intgroup = "Treatment") #sox4 is barely expressed across treatment, sox9 expression majorly changes which makes sense
+
+vs_counts <- assay(vsd)
+rownames(vs_counts) <- vsd@rowRanges$gene_name
+
+ntd <- normTransform(dds)
+meanSdPlot(assay(vsd)) #many lowly expressed genes with no variability filt by mean rank< 10,000 
+```
+
+```{r perform some EDA}
+gene_var <-rowVars(vs_counts)
+log_gene_var <- log1p(gene_var)
+hist(log_gene_var)
+quantile(log1p(gene_var), probs = c(0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 0.995))
+```
+
+```{r}
+threshold <- quantile(log_gene_var, 0.95)
+filtered_vs_counts <- vs_counts[log_gene_var > threshold, ]
+
+dim(filtered_vs_counts)
+pca <- prcomp(filtered_vs_counts, center = TRUE, scale = TRUE) #pc2 is a batch effect, pc4 is neg v positive effect
+pca_df <- pca$rotation
+
+colors <- ifelse(
+  coldata$Treatment == "pos",
+  "red",
+  "black"
+)
+
+#Plot PCs
+plot(pca_df [,"PC1"], 
+     pca_df[, "PC4"], 
+     col = colors, 
+     pch = 16
+)
+```
+```{r}
+# Extract PCA results for plotting
+pca_df <- as.data.frame(pca$rotation)# Scores of the samples
+pca_df$Samples <- rownames(pca_df)  # Add sample names
+
+# Plot PC2 vs. PC4 (Batch effect vs. negative/positive effect)
+ggplot(pca_df, aes(x = PC1, y = PC2, label = Samples)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_text(vjust = 1.0, hjust = 0.5) +  # Add labels
+  theme_minimal() +
+  labs(
+    title = "PCA Plot",
+    x = "PC1",
+    y = "PC2"
+  )
+pca_df$Samples
+```
+
+```{r add batch effect then run model on treatment + batch}
+des_batch <- DESeq(dds)
+results(des_batch)
+summary(des_batch)
+
+res_batch <- as.data.frame(results(des_batch))
+
+summary(res_batch)
+
+sorted_by_padj <- res_df[order(res_df$padj, na.last = NA), ]
+sorted_by_padj
+```
+
+```{r}
+res_df <- as.data.frame(results(des_batch))
+summary(res_df)
+
+unique_gene_names <- make.unique(as.character(des_batch@rowRanges$gene_name))
+rownames(res_df) <- unique_gene_names
+
+
+des_batch
+resultsNames(des_batch)
+contrast_res <- results(des_batch, name = 'Batch_b_vs_a')
+treat_res <- results(des_batch, name = "Treatment_pos_vs_neg")
+summary(contrast_res)
+summary(treat_res)
+```
+
+```{r}
+library(EnhancedVolcano)
+
+EnhancedVolcano(res_df,
+                lab = rownames(res_df),
+                x= "log2FoldChange",
+                y = "pvalue",
+                title = 'Differential Gene Expresion: EGFP+ v EGFP-',
+                xlim = c(-5, 5)
+)
+
+ggsave(file = "/Users/jbrink/Gracz.sox9/20241219_egfp_volcano_LFC.svg",
+        width= 10,
+        height= 8
+)
+```
