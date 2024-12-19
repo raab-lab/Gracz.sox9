@@ -48,7 +48,7 @@ rownames(vsd)
 plotPCA(vsd, intgroup = c("Treatment", "Batch"))
 ```
 
-```{r generate summarized experiment and perform some EDA}
+```{r more EDA}
 #need to do further EDA to see what is driving the effect 
 sox9 <- plotCounts(dds, gene = "ENSMUSG00000000567", intgroup = "Treatment") #sox4 is barely expressed across treatment, sox9 expression majorly changes which makes sense
 
@@ -59,7 +59,7 @@ ntd <- normTransform(dds)
 meanSdPlot(assay(vsd)) #many lowly expressed genes with no variability filt by mean rank< 10,000 
 ```
 
-```{r perform some EDA}
+```{r EDA}
 gene_var <-rowVars(vs_counts)
 log_gene_var <- log1p(gene_var)
 hist(log_gene_var)
