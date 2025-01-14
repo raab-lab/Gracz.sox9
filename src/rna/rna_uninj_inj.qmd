@@ -27,7 +27,7 @@ library(renv)
 #point to quants files 
 input_dir <- "/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/rna/quants"
 #point to sample metadata 
-samples <- read.csv('/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20240320_RNAsamplesheet.csv', header=TRUE)
+samples <- read_csv('/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/20241019RNAsamplesheettotal.csv', header=TRUE)
 ```
 
 ```{r coldata metadata}
