@@ -1,0 +1,237 @@
+---
+title: "atac_dar_gfp"
+output: html_notebook
+---
+```{r load libraries}
+library(DESeq2)
+library(plyranges)
+library(tidyverse)
+library(ComplexHeatmap)
+library(msigdbr)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(clusterProfiler)
+```
+
+```{r load data and format mat}
+load("~/Downloads/20250115ocr_counts.Rdata")
+ocr_bed <- read_bed("/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/atac/union_neg_pos_atac.bed")
+
+ocr_counts$bam.files #need to peform substitution of a matched pattern in a string i.e. bam file names
+ms_id <- gsub(".*_(\\d{4}[NP]).*", "\\1", ocr_counts$bam.files) #match characters before target, capture underscore, exactly 4 digits
+ms_id
+
+assayNames(ocr_counts)
+count_mat <- assay(ocr_counts)
+colnames(ocr_counts) <- ms_id
+
+ocr_counts@colData
+```
+
+```{r}
+ocr_counts@rowRanges
+# Exclude rows 48064 and 48065 from rowRanges
+filtered_rowRanges <- ocr_counts@rowRanges[-c(48064, 48065)]
+
+# Update the rowRanges slot in ocr_counts
+ocr_counts@rowRanges <- filtered_rowRanges
+ocr_counts@assays <- ocr_counts@assays[-c(48064, 48065)] #dropped chM rows from counts table
+
+assayNames(ocr_counts)
+count_mat <- assay(ocr_counts) 
+colnames(ocr_counts) <- ms_id
+
+colnames(count_mat) <- colnames(ocr_counts)
+count_mat
+```
+
+```{r}
+samp_info <- data.frame(row.names = colnames(count_mat),
+                        condition = c('neg', 'pos', 'neg', 'pos', 'neg', 'pos'),
+                        mouse = c('2214', '2214', '2319', '2319', '2341', '2341')#there has to be a better way to do this 
+)
+rownames(samp_info) <- colnames(ocr_counts)
+samp_info
+count_mat <- as.data.frame(count_mat)
+
+dds <- DESeqDataSetFromMatrix(countData = count_mat,
+                              colData = samp_info,
+                              design = ~mouse + condition)
+colData(dds)
+```
+
+```{r}
+dds$condition <- relevel(dds$condition, ref = "neg")
+des <- DESeq(dds)
+res<- results(des)
+```
+
+```{r}
+results(des)
+
+res_shk <- lfcShrink(des, 
+                      coef = "condition_pos_vs_neg", 
+                      type = "apeglm"
+)
+
+vsd <- vst(dds)
+mat <- assay(vsd)
+mat <- limma::removeBatchEffect(mat, vsd$mouse)
+head(mat)
+```
+
+```{r}
+library(ChIPpeakAnno)
+library(ChIPseeker)
+
+peak_annotation <- annotatePeak(ocr_bed, 
+                                TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
+                                annoDb = "org.Mm.eg.db",
+                                tssRegion = c(-3000, 3000)
+)
+peak_annotation
+grange_anno <- as.GRanges(peak_annotation)
+```
+
+```{r not all peaks were annotated and needed to find them in bed file then remove}
+findOverlaps(grange_anno, ocr_bed)
+
+diff_range <- GenomicRanges::setdiff(ocr_bed, grange_anno)
+
+print(diff_range) #these are chrM regions that werent annotated in the peak_anno. so they must go
+ocr_bed <- dropSeqlevels(ocr_bed, value = "chrM", pruning.mode = "coarse")
+```
+
+
+```{r add anno cols to counts}
+peak_meta <- mcols(peak_annotation@anno)
+
+vst_mat <- assay(vst(dds))
+meta_cols <- c("annotation", "SYMBOL")
+vst_meta <- cbind(peak_meta[, meta_cols], vst_mat)
+vst_meta <- vst_meta[!grepl("^Gm|Rik$", vst_meta$SYMBOL), ]
+
+base::saveRDS(vst_meta, "vst_meta.rds")
+```
+
+```{r}
+library(ggplot2)
+
+pca_data <- prcomp(t(assay(vsd))
+percent_variance <- round(100 * (pca_data$sdev^2 / sum(pca_data$sdev^2)), 1)
+
+
+pca_df <- data.frame(
+  PC1 = pca_data_batch$x[, 1],
+  PC2 = pca_data_batch$x[, 2],
+  condition = colData(vsd)$condition, # Extract condition from colData
+  sample = colnames(vsd) # Use column names as sample labels
+)
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = condition, label = sample)) +
+  geom_point(size = 3) +
+  geom_text(vjust = -1, hjust = 0.5, size = 3) +
+  xlab(paste0("PC1: ", percent_variance[1], "% variance")) +
+  ylab(paste0("PC2: ", percent_variance[2], "% variance")) +
+  theme_minimal() +
+  ggtitle("PCA of ATACSeq Samples") +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "right"
+  )
+
+```
+
+```{r}
+vst_meta
+vst_meta[, "annotation_summary"] <- str_split_i(vst_meta$annotation, " ", 1)
+
+res_df <- as.data.frame(res_shk)
+
+
+res_meta <- cbind(res_df, peak_meta)
+res_meta[, "annotation_summary"] <- str_split_i(res_meta$annotation, " ", 1)
+res_meta
+
+res_clean <- res_meta[, -6] # Drop the name col of NA
+
+
+res_clean <- res_clean %>%
+  mutate(X1 = paste0("chr", X1))
+
+res_clean <- res_clean[!grepl("^Gm|Rik$|Mup$", res_clean$SYMBOL), ]
+res_clean
+```
+
+```{r}
+plot_cts <- vst_meta[order(res_clean$padj)[1:138], ]
+plot_cts <- vst_meta[order(res_clean$log2FoldChange), ]
+plot_cts <- as.data.frame(plot_cts)
+
+plot_cts$SYMBOL <- make.unique(plot_cts$SYMBOL)
+
+set.seed(123)
+pheatmap(as.matrix(plot_cts[, 4:ncol(plot_cts)-1]),
+         cluster_rows = TRUE,       
+         cluster_cols = TRUE,           
+         scale = "row",
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         main = "Heatmap of Significant DARs")
+plot_cts
+```
+
+```{r}
+res_meta <- res_meta[!grepl("^Gm|Rik$|Mup$|Cyp2e1", res_meta$SYMBOL), ]
+res_meta$significant <- with(res_meta, padj < 0.1 & abs(log2FoldChange) > 1)
+
+ggplot(res_meta, aes(x = log2FoldChange, y = -log10(padj), color = significant)) +
+  geom_point(alpha = 0.6, size = 1.5) +         # Points with transparency
+  scale_color_manual(values = c("grey", "black")) +  # Color significant points
+  geom_text(
+    data = subset(res_meta, significant),            # Label significant points
+    aes(label = SYMBOL),
+    size = 3, hjust = 0, vjust = 1, check_overlap = TRUE
+  ) +
+  theme_minimal() +                              # Clean theme
+  labs(
+    title = "Volcano Plot of all DAR",
+    x = "Log2 Fold Change",
+    y = "-log10(Adjusted P-value)",
+    color = "Significant"
+  ) +
+  theme(legend.position = "top")
+)
+```
+
+```{r}
+plotAnnoPie(peak_annotation)
+```
+
+```{r goterm of intergenic, intronic, promoter elements}
+head(res_clean)
+res_clean <- res_meta[, -6]
+res_clean
+
+res_promoter <- res_clean %>% filter(str_detect(annotation_summary, "Promoter"))
+res_intron <- res_clean %>% filter(str_detect(annotation_summary, "Intron"))
+res_distal <- res_clean %>% filter(str_detect(annotation_summary, "Distal"))
+
+saveRDS(res_promoter, file = "res_promoter.rds")
+saveRDS(res_intron, file = "res_intron.rds")
+saveRDS(res_distal, file = "res_distal.rds")
+```
+
+```{r}
+library(enrichplot)
+library(msigdbr)
+library(GSEABase)
+library(msigdb)
+```
+
+```{r}
+m_df <- getMsigdb(
+  org = "mm",
+  id = "SYM",
+)
+```
+
+

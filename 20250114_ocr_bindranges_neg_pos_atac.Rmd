@@ -1,0 +1,31 @@
+---
+title: "atac_gfp_unionpeaks"
+output: html_document
+date: "2025-01-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#have consensus peaks per condition made from MSPC command line tool and need to make union OCRs
+```{r load libraries}
+library(tidyverse)
+library(plyranges)
+library(Biostrings)
+library(rtracklayer)
+```
+
+```{r format data bed to granges}
+#read in consensus bed files as DF and convert to GRanges
+neg_bed <- read.csv("/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/atac/sox9N_ConsensusPeaks.bed", header = TRUE, sep="\t")
+pos_bed <- read.csv("/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/atac/sox9P_ConsensusPeaks.bed", header = TRUE, sep="\t")
+
+neg_granges <- makeGRangesFromDataFrame(neg_bed, keep.extra.columns = TRUE, ignore.strand = FALSE, na.rm = TRUE)
+pos_granges <- makeGRangesFromDataFrame(pos_bed, keep.extra.columns = TRUE, ignore.strand = FALSE, na.rm = TRUE)
+```
+
+```{r make union OCR granges obj}
+union_ocr <- bind_ranges(neg_granges, pos_granges) |> reduce_ranges()
+write_bed(union_ocr, file.path("/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/atac", 'union_neg_pos_atac.bed'))
+```
+

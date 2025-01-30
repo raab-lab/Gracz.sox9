@@ -1,0 +1,117 @@
+---
+title: "gsea_atac"
+output: html_document
+date: "2025-01-24"
+---
+```{r}
+library(enrichplot)
+library(msigdbr)
+library(GSEABase)
+library(msigdb)
+library(stringr)
+library(clusterProfiler)
+```
+
+```{r}
+res_promoter
+res_intron
+```
+
+```{r}
+m_df <- getMsigdb(
+  org = "mm",
+  id = "SYM",
+)
+
+h_pathways <- msigdb::subsetCollection(
+  m_df,
+  collection = "h"
+)
+
+#this is a function made by CY#
+make_gsea_term_df <- function(path_col) {
+  pathways <- Map(str_to_upper, geneIds(path_col))
+  df <- stack(pathways)
+  df <- df[, c("ind", "values")]
+  colnames(df) <- c("pathway", "symbol")
+   return(df)
+}
+
+h_paths <- make_gsea_term_df(h_pathways)
+h_gene_sets <- split(h_paths$symbol, h_paths$pathway)
+h_gene_sets_df <- stack(h_gene_sets)
+colnames(h_gene_sets_df) <- c("GENE", "TERM")
+
+h_gene_sets_df <- data.frame(
+  TERM = as.character(h_gene_sets_df$TERM),
+  GENE = as.character(h_gene_sets_df$GENE)
+)
+
+# get differential expression results from DESeq2
+deseq_res <- results(dds)
+
+# Create a ranked gene list by log2 fold change
+ranked_genes <- res_promoter$log2FoldChange
+names(ranked_genes) <- res_promoter$SYMBOL
+names(ranked_genes) <- toupper(names(ranked_genes))
+ranked_genes <- ranked_genes[!is.na(ranked_genes)]
+ranked_genes <- sort(ranked_genes, decreasing = TRUE)
+
+ranked_genes <- ranked_genes[names(ranked_genes) %in% h_gene_sets_df$GENE]
+ranked_genes <- ranked_genes[!duplicated(names(ranked_genes))]
+
+
+gsea_res <- GSEA(
+  ranked_genes,
+  TERM2GENE = h_gene_sets_df,
+  pvalueCutoff = 0.5,
+  verbose = TRUE
+)
+```
+
+```{r}
+library(clusterProfiler)
+head(gsea_res@result)
+dotplot(gsea_res, showCategory = 10)
+
+summary(gsea_res)
+head(as.data.frame(gsea_res)) 
+```
+```{r}
+library(dplyr)
+res_distal2 <- res_distal[!duplicated(names(res_distal))]
+# Filter significant genes based on adjusted p-value
+significant_genes <- res_distal2 %>%
+  filter(padj < 0.3) %>%
+  pull(SYMBOL) # Extract SYMBOL column
+res_distal2
+library(org.Mm.eg.db)
+
+go_res <- enrichGO(
+  gene          = significant_genes,    # List of significant gene symbols
+  OrgDb         = org.Mm.eg.db,         # Mouse annotation database
+  keyType       = "SYMBOL",             # Use gene symbols
+  ont           = "BP",                 # Ontology: BP (Biological Process), CC, or MF
+  pAdjustMethod = "BH",                 # Multiple testing correction method
+  pvalueCutoff  = 0.1,                 # p-value cutoff
+  qvalueCutoff  = 0.05                  # q-value cutoff
+)
+```
+
+```{r}
+barplot(go_res, showCategory = 10, title = "GO Biological Process Enrichment")
+
+```
+
+```{r}
+library(ComplexHeatmap)
+library(msigdbr)
+
+# Retrieve the HALLMARK_TNFA_SIGNALING_VIA_NFKB gene set for mice
+hallmark_genes_df <- msigdbr(species = "Mus musculus", category = "H")
+tnfa_genes <- hallmark_genes_df %>%
+  filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
+  pull(gene_symbol) # Get only the gene symbols
+
+prom_matrix <- scaled_counts_meta_merge[scaled_counts_meta_merge$annotation_summary == "Promoter", c("Ms1153", "Ms1154", "Ms1373", "Ms1176", "Ms1607","Ms1638", "Ms1710", "Ms1724", "SYMBOL")]
+```
