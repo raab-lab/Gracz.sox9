@@ -15,6 +15,8 @@ library(clusterProfiler)
 ```{r}
 res_promoter
 res_intron
+res_distal
+vst_meta
 ```
 
 ```{r}
@@ -106,12 +108,116 @@ barplot(go_res, showCategory = 10, title = "GO Biological Process Enrichment")
 ```{r}
 library(ComplexHeatmap)
 library(msigdbr)
+library(dplyr)
 
 # Retrieve the HALLMARK_TNFA_SIGNALING_VIA_NFKB gene set for mice
 hallmark_genes_df <- msigdbr(species = "Mus musculus", category = "H")
 tnfa_genes <- hallmark_genes_df %>%
   filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
-  pull(gene_symbol) # Get only the gene symbols
+  pull(gene_symbol) # Get only the gene symbols. pull is dplyr not devtools. youre gonna get an error if you dont load pkg
 
-prom_matrix <- scaled_counts_meta_merge[scaled_counts_meta_merge$annotation_summary == "Promoter", c("Ms1153", "Ms1154", "Ms1373", "Ms1176", "Ms1607","Ms1638", "Ms1710", "Ms1724", "SYMBOL")]
+vst_meta[, "annotation_summary"] <- str_split_i(vst_meta$annotation, " ", 1)
+prom_mat <- vst_meta[vst_meta$annotation_summary == "Promoter", c("2214N", "2214P", "2319N", "2319P", "2341N", "2341P", "SYMBOL")]
+
+prom_nfkb <- prom_mat[prom_mat$SYMBOL %in% tnfa_genes, ]
+
+#has to be unique gene symbol to get to rownames so i can plot heatmap
+prom_nfkb$SYMBOL <- make.unique(prom_nfkb$SYMBOL)
+rownames(prom_nfkb) <- prom_nfkb$SYMBOL
+
+prom_numeric <- prom_nfkb[, sapply(prom_nfkb, is.numeric)]
+
+gsea_prom_numeric <- t(scale(t(prom_numeric)))
+
+# Create a heatmap
+Heatmap(gsea_prom_numeric,
+        name = "Z-score",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 10),
+        show_row_names = FALSE,
+        show_column_names = TRUE,
+        cluster_columns = TRUE,
+        kmeans_k = 3)
 ```
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(dplyr)
+#library(scale)  # For Z-score normalization
+
+# Convert DFrame to data frame
+vst_meta_df <- as.data.frame(vst_meta)
+
+# Step 1: Filter Enhancers and Promoters
+intron_df <- vst_meta_df %>% filter(annotation_summary == "Intron")
+distal_df <- vst_meta_df %>% filter(annotation_summary == "Distal")
+promoter_df <- vst_meta_df %>% filter(annotation_summary == "Promoter")
+
+# Step 2: Compute average expression per condition (columns ending with N or P)
+# Dynamically select columns ending with "N" or "P"
+condition_cols <- grep("N$|P$", colnames(vst_meta_df), value = TRUE)
+
+# Calculate average expression for each gene in each condition
+distal_avg <- distal_df %>%
+  group_by(SYMBOL) %>%
+  summarise(across(all_of(condition_cols), mean))  
+
+intron_avg <- intron_df %>%
+  group_by(SYMBOL) %>%
+  summarise(across(all_of(condition_cols), mean))# Averaging across conditions
+
+promoter_avg <- promoter_df %>%
+  group_by(SYMBOL) %>%
+  summarise(across(all_of(condition_cols), mean))  # Averaging across conditions
+
+# Step 3: Match enhancer and promoter by gene name
+merged_df <- inner_join(distal_avg, intron_avg, by = "SYMBOL", suffix = c("_distal", "_intron"))
+
+# Step 4: Filter by TNFA genes
+tnfa_genes <- hallmark_genes_df %>%
+  filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
+  pull(gene_symbol)
+
+# Define the list of specific genes to filter
+genes_to_filter <- c("Cd44", "Tnip1", "Ets2", "Hbegf", "Klf4", "Smad3", "Ccnd1", "Klf4", "Tsc22d1", "Lif", "Edn1", "Sik1", "Nr4a2", "Cd83", "Ier3", "Pfkfb3")
+
+# Filter tnfa_genes for the specific genes
+filtered_tnfa_genes <- tnfa_genes[tnfa_genes %in% genes_to_filter]
+
+
+merged_df_filtered <- merged_df %>% filter(SYMBOL %in% filtered_tnfa_genes)
+
+# Step 5: Convert to matrix for Heatmap
+expr_matrix <- as.matrix(merged_df_filtered[, -1])  # Remove SYMBOL column
+rownames(expr_matrix) <- merged_df_filtered$SYMBOL
+
+# Step 6: Z-score normalize (by row)
+expr_matrix_zscore <- t(scale(t(expr_matrix)))  # Normalize each row (gene)
+cor_matrix <- cor(expr_matrix_zscore, method = "pearson")
+
+
+# Step 7: Generate Heatmap
+Heatmap(
+  expr_matrix_zscore, 
+  name = "Z-score", 
+  cluster_rows = TRUE, 
+  cluster_columns = TRUE, 
+  show_row_names = TRUE, 
+  show_column_names = TRUE, 
+  col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+)
+condition_cols
+```
+```{r}
+# Assuming expr_matrix_zscore is the data used for the heatmap
+
+# Extract the row names
+rownames_heatmap <- rownames(expr_matrix_zscore)
+
+# Print or view the row names
+print(rownames_heatmap)
+
+```
+
+
+
