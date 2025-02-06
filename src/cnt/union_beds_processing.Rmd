@@ -1,0 +1,53 @@
+---
+title: "20250205_cnt_unionpeaks"
+output: html_document
+date: "2025-02-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r load libraries}
+library(tidyverse)
+library(plyranges)
+library(Biostrings)
+library(rtracklayer)
+```
+
+```{r write a function}
+#read in consensus peak files as derived from narrowPeaks and convert to granges the count peaks found across conditions and write as union bed file
+process_bed_files <- function(neg_bed_path, pos_bed_path, output_dir) {
+  # Check if input files exist
+  if (!file.exists(neg_bed_path)) {
+    stop("Negative BED file does not exist: ", neg_bed_path)
+  }
+  if (!file.exists(pos_bed_path)) {
+    stop("Positive BED file does not exist: ", pos_bed_path)
+  }
+  
+  neg_bed <- read.csv(neg_bed_path, header = TRUE, sep = "\t")
+  pos_bed <- read.csv(pos_bed_path, header = TRUE, sep = "\t")
+  
+  neg_granges <- makeGRangesFromDataFrame(neg_bed, keep.extra.columns = TRUE, ignore.strand = FALSE, na.rm = TRUE)
+  pos_granges <- makeGRangesFromDataFrame(pos_bed, keep.extra.columns = TRUE, ignore.strand = FALSE, na.rm = TRUE)
+  
+  union_ocr <- bind_ranges(neg_granges, pos_granges) |> reduce_ranges()
+  
+  output_path <- file.path(output_dir, 'union_sox9_ac.bed')
+  write_bed(union_ocr, output_path)
+  
+  return(union_ocr)
+}
+```
+
+```{r assign obj}
+neg_bed_path <- "/Users/jbrink/Downloads/Sox9N_H3K27ac_ConsensusPeaks.bed"
+pos_bed_path <- "/Users/jbrink/Downloads/Sox9P_H3K27ac_ConsensusPeaks.bed"
+output_dir <- "/Users/jbrink/Gracz.sox9/src/cnt"
+```
+
+```{r}
+union_ocr <- process_bed_files(neg_bed_path, pos_bed_path, output_dir)
+```
+
+
