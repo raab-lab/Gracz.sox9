@@ -44,8 +44,63 @@ colnames(count_mat) <- colnames(ocr_counts)
 count_mat
 ```
 
+######space for me to do some EDA because i found that one of my samples has really low seq depth#####
 ```{r}
-samp_info <- data.frame(row.names = colnames(count_mat),
+#so i can plot a histogram of counts per peak
+dim(count_mat)
+total_counts_filt
+total_counts_filt <- rowSums(filtered_count_mat) #sum counts across samples per peak
+ggplot(data.frame(TotalCounts = total_counts), aes(x = TotalCounts)) +
+  geom_histogram(bins = 50, fill = "blue", color = "black") +
+  scale_x_log10() + #log trans axis
+  labs(title = "distro of total counts per peak",
+       x = "total counts (log10)",
+       y = "frequency") 
+#histogram shows most peaks have low to moderate counts with a few hihgly accessible regions
+```
+
+```{r}
+library(reshape)
+#box plot 
+# Reshape count matrix for ggplot
+count_matrix_long  <- melt(count_mat)
+
+# Plot boxplot of counts per sample
+ggplot(count_matrix_long, aes(x = variable, y = value)) +
+  geom_boxplot(fill = "orange") +
+  scale_y_log10() +  # Log-transform y-axis for better visualization
+  labs(title = "Distribution of Counts per Sample",
+       x = "Samples",
+       y = "Counts (log10)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+#box plot shows that sample median count is ~100 per peak
+```
+
+```{r}
+#need to remove all rows in count mat where peaks are not found in 2/3 samples per condition
+# Define replicates for each condition
+condition_N <- c("2214N", "2319N", "2341N")
+condition_P <- c("2214P", "2319P", "2341P")
+
+min_count <- 10
+
+# Filter peaks present in at least 2 replicates in either condition
+keep <- (rowSums(count_mat[, condition_N] >= min_count) >= 2) |
+        (rowSums(count_mat[, condition_P] >= min_count) >= 2)
+filt_peaks_counts <- count_mat[keep, ]
+
+dim(filt_peaks_counts)
+
+#remove all rows in count mat where not a single sample has more than 50 reads
+keep <- rowSums(filt_peaks_counts) >= 50  # Keep peaks with at least 50 total reads
+filtered_count_mat <- filt_peaks_counts[keep, ]
+dim(filtered_count_mat)
+#hist of filt_mat doesnt look much different but i filtered out no additional peaks so thats good
+```
+##end eda
+```{r}
+samp_info <- data.frame(row.names = colnames(filtered_count_mat),
                         condition = c('neg', 'pos', 'neg', 'pos', 'neg', 'pos'),
                         mouse = c('2214', '2214', '2319', '2319', '2341', '2341')#there has to be a better way to do this 
 )
@@ -53,7 +108,7 @@ rownames(samp_info) <- colnames(ocr_counts)
 samp_info
 count_mat <- as.data.frame(count_mat)
 
-dds <- DESeqDataSetFromMatrix(countData = count_mat,
+dds <- DESeqDataSetFromMatrix(countData = filtered_count_mat,
                               colData = samp_info,
                               design = ~mouse + condition)
 colData(dds)
@@ -63,6 +118,8 @@ colData(dds)
 dds$condition <- relevel(dds$condition, ref = "neg")
 des <- DESeq(dds)
 res<- results(des)
+summary(res)
+res
 ```
 
 ```{r}
@@ -74,9 +131,11 @@ res_shk <- lfcShrink(des,
 )
 
 vsd <- vst(dds)
+plotPCA(vsd)
 mat <- assay(vsd)
-mat <- limma::removeBatchEffect(mat, vsd$mouse)
+mat_batch <- limma::removeBatchEffect(mat, vsd$mouse)
 head(mat)
+
 ```
 
 ```{r}
@@ -101,12 +160,16 @@ print(diff_range) #these are chrM regions that werent annotated in the peak_anno
 ocr_bed <- dropSeqlevels(ocr_bed, value = "chrM", pruning.mode = "coarse")
 ```
 
+```{r}
+#merged_data <- merge(ocr_bed, deseq2_results, by = "peak_id")
+```
+
 
 ```{r add anno cols to counts}
 peak_meta <- mcols(peak_annotation@anno)
-
+peak_meta
 vst_mat <- assay(vst(dds))
-meta_cols <- c("annotation", "SYMBOL")
+meta_cols <- c("annotation", "SYMBOL", "geneChr", "geneStart", "geneEnd")
 vst_meta <- cbind(peak_meta[, meta_cols], vst_mat)
 vst_meta <- vst_meta[!grepl("^Gm|Rik$", vst_meta$SYMBOL), ]
 
@@ -114,31 +177,66 @@ base::saveRDS(vst_meta, "vst_meta.rds")
 ```
 
 ```{r}
-library(ggplot2)
+# Extract the last 6 columns
+counts_matrix <- as.matrix(vst_meta[, 6:11])
 
-pca_data <- prcomp(t(assay(vsd))
-percent_variance <- round(100 * (pca_data$sdev^2 / sum(pca_data$sdev^2)), 1)
+# Calculate the standard deviation for each row
+row_std_dev <- apply(counts_matrix, 1, sd)
 
+# Add the standard deviation to the DataFrame
+vst_meta$std_dev <- row_std_dev
 
-pca_df <- data.frame(
-  PC1 = pca_data_batch$x[, 1],
-  PC2 = pca_data_batch$x[, 2],
-  condition = colData(vsd)$condition, # Extract condition from colData
-  sample = colnames(vsd) # Use column names as sample labels
+# Sort by standard deviation and select top 1500 regions
+top_regions <- vst_meta[order(vst_meta$std_dev, decreasing = TRUE), ]
+top_regions <- top_regions[1:4000, ]
+
+# Create a BED file from the top regions
+top_regions_bed <- data.frame(
+  chr = top_regions$geneChr,
+  start = top_regions$geneStart,
+  end = top_regions$geneEnd
 )
 
-ggplot(pca_df, aes(x = PC1, y = PC2, color = condition, label = sample)) +
-  geom_point(size = 3) +
-  geom_text(vjust = -1, hjust = 0.5, size = 3) +
-  xlab(paste0("PC1: ", percent_variance[1], "% variance")) +
-  ylab(paste0("PC2: ", percent_variance[2], "% variance")) +
-  theme_minimal() +
-  ggtitle("PCA of ATACSeq Samples") +
-  theme(
-    plot.title = element_text(hjust = 0.5),
-    legend.position = "right"
-  )
+# Save to a BED file
+write.table(top_regions_bed, "top_4000_variable_regions.bed", sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+```
 
+```{r}
+mat_batch
+# Calculate the standard deviation for each row
+batch_std_dev <- apply(mat_batch, 1, sd)
+
+# Add the standard deviation to the DataFrame
+mat_batch$std_dev <- batch_std_dev
+
+head(mat_batch)
+
+# Sort by standard deviation and select top 1500 regions
+top_regions <- mat_batch[order(mat_batch$std_dev, decreasing = TRUE), ]
+top_regions <- top_regions[1:4000, ]
+```
+
+
+```{r}
+pca <- prcomp(t(mat_batch))
+percent_var <- round(100 * (pca$sdev^2) / sum(pca$sdev^2), 1)
+
+pc_df <- data.frame(
+  PC1 = pca$x[, 1],
+  PC2 = pca$x[, 2],
+  condition = colData(vsd)$condition,
+  sample = colnames(vsd)
+)
+
+ggplot(pc_df, aes(x = PC1, y = PC2, color = condition, label = sample)) +
+  geom_point(size = 3) +  # Scatter plot
+  geom_text(vjust = 1.5, hjust = 1.5) +  # Add sample labels
+  theme_minimal() +
+  labs(
+    title = "PCA Plot of ATACseq Dataset",
+    x = paste0("PC1 (", round(100 * (pca$sdev[1]^2) / sum(pca$sdev^2), 1), "%)"),
+    y = paste0("PC2 (", round(100 * (pca$sdev[2]^2) / sum(pca$sdev^2), 1), "%)")
+  )
 ```
 
 ```{r}
@@ -159,7 +257,59 @@ res_clean <- res_clean %>%
   mutate(X1 = paste0("chr", X1))
 
 res_clean <- res_clean[!grepl("^Gm|Rik$|Mup$", res_clean$SYMBOL), ]
+```
+
+
+```{r}
 res_clean
+# Remove rows with NA values in padj or log2FoldChange
+res_clean <- res_clean %>%
+  filter(!is.na(padj) & !is.na(log2FoldChange))
+
+padj_threshold <- 0.1
+log2FC_threshold <- 0.5
+
+# Now filter for significant regions
+up_regulated <- res_clean %>%
+  filter(padj < padj_threshold & log2FoldChange > log2FC_threshold)
+
+down_regulated <- res_clean %>%
+  filter(padj < padj_threshold & log2FoldChange < -log2FC_threshold)
+```
+
+```{r}
+# Load dplyr
+library(dplyr)
+
+# Rename columns
+up_regulated <- up_regulated %>%
+  rename(
+    chr = geneChr,
+    start = geneStart,
+    end = geneEnd
+  )
+
+down_regulated <- down_regulated %>%
+  rename(
+    chr = geneChr,
+    start = geneStart,
+    end = geneEnd
+  )
+```
+
+```{r}
+# Function to save data as BED file
+save_as_bed <- function(data, filename) {
+  bed_data <- data %>% select(chr, start, end)
+  write.table(bed_data, file = filename, sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+}
+
+# Save up-regulated regions
+save_as_bed(up_regulated, "up_regulated.bed")
+
+# Save down-regulated regions
+save_as_bed(down_regulated, "down_regulated.bed")
+colnames(down_regulated)
 ```
 
 ```{r}
@@ -219,19 +369,3 @@ saveRDS(res_promoter, file = "res_promoter.rds")
 saveRDS(res_intron, file = "res_intron.rds")
 saveRDS(res_distal, file = "res_distal.rds")
 ```
-
-```{r}
-library(enrichplot)
-library(msigdbr)
-library(GSEABase)
-library(msigdb)
-```
-
-```{r}
-m_df <- getMsigdb(
-  org = "mm",
-  id = "SYM",
-)
-```
-
-

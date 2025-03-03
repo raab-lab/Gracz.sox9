@@ -33,7 +33,7 @@ process_bed_files <- function(neg_bed_path, pos_bed_path, output_dir) {
   
   union_ocr <- bind_ranges(neg_granges, pos_granges) |> reduce_ranges()
   
-  output_path <- file.path(output_dir, 'union_sox9_ac.bed')
+  output_path <- file.path(output_dir, 'union_sox9_me3.bed') #change bed file name for each run
   write_bed(union_ocr, output_path)
   
   return(union_ocr)
@@ -41,8 +41,8 @@ process_bed_files <- function(neg_bed_path, pos_bed_path, output_dir) {
 ```
 
 ```{r assign obj}
-neg_bed_path <- "/Users/jbrink/Downloads/Sox9N_H3K27ac_ConsensusPeaks.bed"
-pos_bed_path <- "/Users/jbrink/Downloads/Sox9P_H3K27ac_ConsensusPeaks.bed"
+neg_bed_path <- "/Users/jbrink/Downloads/Sox9N_H3K27me3_ConsensusPeaks.bed"
+pos_bed_path <- "/Users/jbrink/Downloads/Sox9P_H3K27me3_ConsensusPeaks.bed"
 output_dir <- "/Users/jbrink/Gracz.sox9/src/cnt"
 ```
 

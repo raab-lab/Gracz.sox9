@@ -13,6 +13,7 @@ library(dplyr)
 library(DESeq2)
 library(tximeta)
 library(vsn)
+library(dplyr)
 ```
 #need to point to the dir then read in csv with sample metadata from alignment run. then i need to constuct coldata from metadata in sample info csv by assigning to new obj, then adding cols to coldata by converting df cols to character vectors and concatenating to new df/coldata (adding col data)
 ```{r load data, construct coldata}
@@ -35,26 +36,101 @@ coldata$files <- file.path(quants_dir, coldata$names, "quant.sf")
 coldata <- coldata[-c(11, 12, 13), ] #c function returns a vector 
 
 coldata$files
+colnames(coldata)[colnames(coldata) == "Cell.Line"] <- "MouseID"
+coldata_clean <- coldata[-c(1,2), ]
+# Change MouseID for specific rows
+#coldata$MouseID[c(1,2)] <- "1723" dropped
+
+coldata_clean$MouseID[c(1,2)] <- "1724"
+coldata_clean$MouseID[c(3,4)] <- "1881"
+coldata_clean$MouseID[c(5,6)] <- "2139"
+coldata_clean$MouseID[c(7,8)]<- "2114"
+
+print(coldata_clean)
 ```
 #next i need to import salmon-generated transcript counts (TPM) and generate a summarized experiment of the counts summarized to gene-level. will also add geneIds
 ```{r generate summarized experiment and perform some EDA}
-sum_exp <- tximeta(coldata)
+sum_exp <- tximeta(coldata_clean)
 sum_gene <- summarizeToGene(sum_exp, assignRanges = "abundant")
 dds <- DESeqDataSet(sum_gene, design = ~Batch + Treatment)
 
 vsd <- vst(dds)
 rownames(vsd)
+vsd_mat <- assay(vsd)
+vsd_mat
+plotPCA(vsd, intgroup = c("Treatment", "Batch"))#PC1 driven by batch. not used in manuscript. pc with batch corrected counts is
+```
 
-plotPCA(vsd, intgroup = c("Treatment", "Batch"))
+```{r}
+library(pheatmap)
+library(RColorBrewer)
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste(vsd$SampleID, vsd$Treatment, sep = " - ")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+dds$SampleID
+```
+
+```{r tried to sub pc1 for batch effect when dropping sample but this didn't matter}
+###########disregard was not used in final model. keeping for notes.
+vsd <- vst(dds, blind = TRUE)
+pca_data <- prcomp(t(assay(vsd)))
+pc1 <- pca_data$x[, 1]
+
+
+colData(dds)$PC1 <- pc1
+
+
+design(dds) <- ~ PC1 + Treatment
+```
+
+```{r tried to sub pc1 for batch effect when dropping sample but this didn't matter}
+#design(dds) = ~Batch + Treatment
+des <- DESeq(dds)
+vsd <- vst(dds)
+
+
+results <- results(des)
+summary(results)
+```
+
+```{r}
+vsd_mat <- assay(vsd)
+mat_batch <- limma::removeBatchEffect(vsd_mat, batch = vsd$Batch, group = vsd$Treatment)
+
+pca <- prcomp(t(mat_batch))
+percent_var <- round(100 * (pca$sdev^2) / sum(pca$sdev^2), 1)
+
+pc_df <- data.frame(
+  PC1 = pca$x[, 1],
+  PC2 = pca$x[, 2],
+  condition = colData(vsd)$Treatment,
+  sample = colnames(vsd)
+)
+
+ggplot(pc_df, aes(x = PC1, y = PC2, color = condition)) + #pca for paper
+  geom_point(size = 3) +  # Scatter plot
+  theme_minimal() +
+  labs(
+    title = "PCA of RNAseq: EGFP+ v EGFP-",
+    x = paste0("PC1 (", round(100 * (pca$sdev[1]^2) / sum(pca$sdev^2), 1), "%)"),
+    y = paste0("PC2 (", round(100 * (pca$sdev[2]^2) / sum(pca$sdev^2), 1), "%)")
+  )
 ```
 
 ```{r more EDA}
 #need to do further EDA to see what is driving the effect 
-sox9 <- plotCounts(dds, gene = "ENSMUSG00000000567", intgroup = "Treatment") #sox4 is barely expressed across treatment, sox9 expression majorly changes which makes sense
+aox4 <- plotCounts(dds, gene = "ENSMUSG00000000567", intgroup = "Treatment") #sox4 is barely expressed across treatment, sox9 expression majorly changes which makes sense
+dds
 
 vs_counts <- assay(vsd)
-rownames(vs_counts) <- vsd@rowRanges$gene_name
-
+rownames(mat_batch) <- vsd@rowRanges$gene_name
+mat_batch
 ntd <- normTransform(dds)
 meanSdPlot(assay(vsd)) #many lowly expressed genes with no variability filt by mean rank< 10,000 
 ```
@@ -87,6 +163,7 @@ plot(pca_df [,"PC1"],
      pch = 16
 )
 ```
+
 ```{r}
 # Extract PCA results for plotting
 pca_df <- as.data.frame(pca$rotation)# Scores of the samples
@@ -105,31 +182,23 @@ ggplot(pca_df, aes(x = PC1, y = PC2, label = Samples)) +
 pca_df$Samples
 ```
 
-```{r add batch effect then run model on treatment + batch}
-des_batch <- DESeq(dds)
-results(des_batch)
-summary(des_batch)
+```{r clean up res}
+summary(results) #batch + treatment dropped 1723
+res_df <- as.data.frame(results)
 
-res_batch <- as.data.frame(results(des_batch))
-
-summary(res_batch)
+gene_names <- make.unique(as.character(dds@rowRanges$gene_name))
+rownames(res_df) <- gene_names
 
 sorted_by_padj <- res_df[order(res_df$padj, na.last = NA), ]
 sorted_by_padj
+
+res_df
 ```
 
 ```{r}
-res_df <- as.data.frame(results(des_batch))
-summary(res_df)
-
-unique_gene_names <- make.unique(as.character(des_batch@rowRanges$gene_name))
-rownames(res_df) <- unique_gene_names
-
-
-des_batch
-resultsNames(des_batch)
-contrast_res <- results(des_batch, name = 'Batch_b_vs_a')
-treat_res <- results(des_batch, name = "Treatment_pos_vs_neg")
+resultsNames(dds)
+contrast_res <- results(dds, name = 'PC1')
+treat_res <- results(dds, name = "Treatment_pos_vs_neg")
 summary(contrast_res)
 summary(treat_res)
 ```
@@ -145,8 +214,74 @@ EnhancedVolcano(res_df,
                 xlim = c(-5, 5)
 )
 
-ggsave(file = "/Users/jbrink/Gracz.sox9/20241219_egfp_volcano_LFC.svg",
+ggsave(file = "/Users/jbrink/Gracz.sox9/20250303_egfp_deg_volcano_LFC.svg",
         width= 10,
         height= 8
 )
 ```
+
+```{r}
+library(msigdbr)
+# Retrieve the HALLMARK_TNFA_SIGNALING_VIA_NFKB gene set for mice
+hallmark_genes_df <- msigdbr(species = "Mus musculus", category = "H")
+tnfa_genes <- hallmark_genes_df %>%
+  dplyr::filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
+  pull(gene_symbol)
+```
+
+```{r}
+gene_names <- make.unique(as.character(dds@rowRanges$gene_name))
+rownames(mat_batch) <- gene_names
+cts_df <- as.data.frame(mat_batch)
+cts_nfkb <- cts_df[tnfa_genes, ]
+cts_nfkb <- na.omit(cts_nfkb)
+sig_nfkb <- res_df[tnfa_genes,]
+sig_nfkb <- na.omit(sig_nfkb)
+sig_nfkb
+
+# Create the scatterplot
+ggplot(sig_nfkb, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = padj < 0.1), size = 3, alpha = 0.7) +
+  geom_text(
+    aes(label = ifelse(padj < 0.1, rownames(sig_nfkb), "")),  # Label only significant points
+    vjust = 1.5, hjust = 1.5, size = 3, check_overlap = TRUE
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey") +  # Significance threshold
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey") +  # Fold change thresholds
+  scale_color_manual(values = c("grey", "red")) +
+  labs(
+    x = "log2 Fold Change",
+    y = "-log10(Adjusted p-value)",
+    title = "Volcano Plot of Differentially Expressed NFkB genes",
+    color = "Significant (padj < 0.1)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "bottom"
+  )
+```
+
+```{r save all of these gene lists for plotting with atac}
+save_as_csv <- function(dataframe, filename, row.names = TRUE, ...) {
+  # Check if the input is a dataframe
+  if (!is.data.frame(dataframe)) {
+    stop("Input must be a dataframe.")
+  }
+  
+  # Check if the filename is provided and is a character string
+  if (!is.character(filename) || length(filename) != 1) {
+    stop("Filename must be a single character string.")
+  }
+  
+  # Save the dataframe as a CSV file
+  write.csv(dataframe, file = filename, row.names = row.names, ...)
+  
+  # Print a confirmation message
+  message("Dataframe saved as '", filename, "'")
+}
+
+# Save the dataframe as a CSV file
+save_as_csv(sig_nfkb, "~/Gracz.sox9/src/rna/rnaseq_res_nfkb_gfp.csv")
+```
+
