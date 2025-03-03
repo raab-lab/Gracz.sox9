@@ -143,6 +143,8 @@ quantile(log1p(gene_var), probs = c(0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 0.995))
 ```
 
 ```{r}
+
+##didnt use much
 threshold <- quantile(log_gene_var, 0.95)
 filtered_vs_counts <- vs_counts[log_gene_var > threshold, ]
 
@@ -156,7 +158,6 @@ colors <- ifelse(
   "black"
 )
 
-#Plot PCs
 plot(pca_df [,"PC1"], 
      pca_df[, "PC4"], 
      col = colors, 
@@ -222,7 +223,7 @@ ggsave(file = "/Users/jbrink/Gracz.sox9/20250303_egfp_deg_volcano_LFC.svg",
 
 ```{r}
 library(msigdbr)
-# Retrieve the HALLMARK_TNFA_SIGNALING_VIA_NFKB gene set for mice
+#get hallmark nfkb genes
 hallmark_genes_df <- msigdbr(species = "Mus musculus", category = "H")
 tnfa_genes <- hallmark_genes_df %>%
   dplyr::filter(gs_name == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>%
@@ -239,7 +240,7 @@ sig_nfkb <- res_df[tnfa_genes,]
 sig_nfkb <- na.omit(sig_nfkb)
 sig_nfkb
 
-# Create the scatterplot
+
 ggplot(sig_nfkb, aes(x = log2FoldChange, y = -log10(padj))) +
   geom_point(aes(color = padj < 0.1), size = 3, alpha = 0.7) +
   geom_text(
@@ -281,7 +282,6 @@ save_as_csv <- function(dataframe, filename, row.names = TRUE, ...) {
   message("Dataframe saved as '", filename, "'")
 }
 
-# Save the dataframe as a CSV file
 save_as_csv(sig_nfkb, "~/Gracz.sox9/src/rna/rnaseq_res_nfkb_gfp.csv")
 ```
 
