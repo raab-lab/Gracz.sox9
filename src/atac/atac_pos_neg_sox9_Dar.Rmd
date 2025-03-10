@@ -1,5 +1,5 @@
 ---
-title: "atac_dar_gfp"
+title: "DRAFT_atac_dar_gfp"
 output: html_notebook
 ---
 ```{r load libraries}
@@ -13,7 +13,7 @@ library(clusterProfiler)
 ```
 
 ```{r load data and format mat}
-load("~/Downloads/20250115ocr_counts.Rdata")
+load("~/Downloads/20250115ocr_counts.Rdata") 
 ocr_bed <- read_bed("/Users/jbrink/Desktop/Lab2024/gracz.sox9_archive/atac/union_neg_pos_atac.bed")
 
 ocr_counts$bam.files #need to peform substitution of a matched pattern in a string i.e. bam file names
@@ -25,22 +25,25 @@ count_mat <- assay(ocr_counts)
 colnames(ocr_counts) <- ms_id
 
 ocr_counts@colData
+colnames(ocr_counts)
 ```
 
 ```{r}
 ocr_counts@rowRanges
 # Exclude rows 48064 and 48065 from rowRanges
 filtered_rowRanges <- ocr_counts@rowRanges[-c(48064, 48065)]
+granges_df <- as.data.frame(filtered_rowRanges)
 
 # Update the rowRanges slot in ocr_counts
 ocr_counts@rowRanges <- filtered_rowRanges
 ocr_counts@assays <- ocr_counts@assays[-c(48064, 48065)] #dropped chM rows from counts table
 
 assayNames(ocr_counts)
-count_mat <- assay(ocr_counts) 
-colnames(ocr_counts) <- ms_id
+count_mat <- assay(ocr_counts) #add count data to matrix
+colnames(count_mat) <- colnames(ocr_counts) #add mouse id to col names of counts
+count_mat <- cbind(count_mat, granges_df)#this count matrix is rows are grange, col are sample and excludes chM
+write.csv(count_mat, "/Users/jbrink/Gracz.sox9/src/atac/20250225_counts_matrix_pos_neg_atac.csv") #saving
 
-colnames(count_mat) <- colnames(ocr_counts)
 count_mat
 ```
 
@@ -48,15 +51,14 @@ count_mat
 ```{r}
 #so i can plot a histogram of counts per peak
 dim(count_mat)
-total_counts_filt
-total_counts_filt <- rowSums(filtered_count_mat) #sum counts across samples per peak
+total_counts <- rowSums(count_mat) #sum counts across samples per peak
 ggplot(data.frame(TotalCounts = total_counts), aes(x = TotalCounts)) +
   geom_histogram(bins = 50, fill = "blue", color = "black") +
   scale_x_log10() + #log trans axis
   labs(title = "distro of total counts per peak",
        x = "total counts (log10)",
        y = "frequency") 
-#histogram shows most peaks have low to moderate counts with a few hihgly accessible regions
+#histogram shows most peaks have low to moderate counts with a few highly accessible regions
 ```
 
 ```{r}
@@ -80,7 +82,7 @@ ggplot(count_matrix_long, aes(x = variable, y = value)) +
 ```{r}
 #need to remove all rows in count mat where peaks are not found in 2/3 samples per condition
 # Define replicates for each condition
-condition_N <- c("2214N", "2319N", "2341N")
+condition_N <- c("2214N", "2319N", "2341N") 
 condition_P <- c("2214P", "2319P", "2341P")
 
 min_count <- 10
@@ -88,38 +90,58 @@ min_count <- 10
 # Filter peaks present in at least 2 replicates in either condition
 keep <- (rowSums(count_mat[, condition_N] >= min_count) >= 2) |
         (rowSums(count_mat[, condition_P] >= min_count) >= 2)
-filt_peaks_counts <- count_mat[keep, ]
 
-dim(filt_peaks_counts)
-
-#remove all rows in count mat where not a single sample has more than 50 reads
-keep <- rowSums(filt_peaks_counts) >= 50  # Keep peaks with at least 50 total reads
-filtered_count_mat <- filt_peaks_counts[keep, ]
-dim(filtered_count_mat)
-#hist of filt_mat doesnt look much different but i filtered out no additional peaks so thats good
+sum(keep)
+filt_peaks_counts <- count_mat[keep, ] #filtered out ~1,000 peaks
 ```
 ##end eda
 ```{r}
-samp_info <- data.frame(row.names = colnames(filtered_count_mat),
+dim(filt_peaks_counts)
+peak_mat <- filt_peaks_counts[, c("2214N","2214P","2319N", "2319P", "2341N", "2341P")]
+samp_info <- data.frame(row.names = colnames(peak_mat),
                         condition = c('neg', 'pos', 'neg', 'pos', 'neg', 'pos'),
-                        mouse = c('2214', '2214', '2319', '2319', '2341', '2341')#there has to be a better way to do this 
+                        mouse = c('2214', '2214','2319', '2319', '2341', '2341'),
+                        batch = c('A', 'A', 'B', 'B', 'C', 'C') #there has to be a better way to do this 
 )
-rownames(samp_info) <- colnames(ocr_counts)
 samp_info
-count_mat <- as.data.frame(count_mat)
 
-dds <- DESeqDataSetFromMatrix(countData = filtered_count_mat,
+dds <- DESeqDataSetFromMatrix(countData = peak_mat,
                               colData = samp_info,
-                              design = ~mouse + condition)
+                              design = ~condition)
 colData(dds)
+```
+
+```{r}
+vsd <- vst(dds, blind = TRUE)
+pca_data <- prcomp(t(assay(vsd)))
+pc1 <- pca_data$x[, 1]
+
+
+colData(dds)$PC1 <- pc1
+
+
+design(dds) <- ~ PC1 + condition
+
+
+dds <- DESeq(dds)
+vsd <- vst(dds)
+plotPCA(vsd, intgroup = "mouse")
+
+results <- results(dds)
+summary(results)
+design(dds)
 ```
 
 ```{r}
 dds$condition <- relevel(dds$condition, ref = "neg")
 des <- DESeq(dds)
-res<- results(des)
+res <- results(des)
+
 summary(res)
-res
+cooks <- assays(dds)[["cooks"]]
+
+par(mar=c(8,5,2,2))
+boxplot(log10(cooks), range=0, las=2)
 ```
 
 ```{r}
@@ -129,35 +151,43 @@ res_shk <- lfcShrink(des,
                       coef = "condition_pos_vs_neg", 
                       type = "apeglm"
 )
+res_shk
+res_shk_cts <- cbind(res_shk, filt_peaks_counts)
+write.csv(res_shk_cts,"/Users/jbrink/Gracz.sox9/src/atac/20250225_res_cts_matrix_pos_neg_atac.csv")
+
+
 
 vsd <- vst(dds)
-plotPCA(vsd)
+plotPCA(vsd, intgroup = "mouse")
 mat <- assay(vsd)
-mat_batch <- limma::removeBatchEffect(mat, vsd$mouse)
-head(mat)
-
+mat_batch4 <- limma::removeBatchEffect(mat, covariates = vsd$PC1, group = vsd$condition)
+dim(mat_batch4)
+head(mat_batch4)
 ```
 
 ```{r}
 library(ChIPpeakAnno)
 library(ChIPseeker)
 
-peak_annotation <- annotatePeak(ocr_bed, 
+res_bed <- filt_peaks_counts[, !colnames(filt_peaks_counts) %in% c("2214N", "2214P", "2319N", "2319P", "2341N", "2341P")]
+res_bed <- makeGRangesFromDataFrame(res_bed, keep.extra.columns = TRUE)
+peak_anno <- annotatePeak(res_bed, 
                                 TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
                                 annoDb = "org.Mm.eg.db",
                                 tssRegion = c(-3000, 3000)
 )
-peak_annotation
+peak_anno
 grange_anno <- as.GRanges(peak_annotation)
 ```
 
 ```{r not all peaks were annotated and needed to find them in bed file then remove}
+#in new bed where peaks were dropped that were not found in 2/3 bio reps this is no longer an issue
 findOverlaps(grange_anno, ocr_bed)
 
 diff_range <- GenomicRanges::setdiff(ocr_bed, grange_anno)
 
 print(diff_range) #these are chrM regions that werent annotated in the peak_anno. so they must go
-ocr_bed <- dropSeqlevels(ocr_bed, value = "chrM", pruning.mode = "coarse")
+ocr_bed <- dropSeqlevels(ocr_bed, value = "chrM", pruning.mode = "coarse") #i already dropped these from the counts data during a cleaning step
 ```
 
 ```{r}
@@ -166,13 +196,14 @@ ocr_bed <- dropSeqlevels(ocr_bed, value = "chrM", pruning.mode = "coarse")
 
 
 ```{r add anno cols to counts}
-peak_meta <- mcols(peak_annotation@anno)
+peak_meta <- mcols(peak_anno@anno)
 peak_meta
-vst_mat <- assay(vst(dds))
+vsd
+vst_mat <- assay(vsd)
 meta_cols <- c("annotation", "SYMBOL", "geneChr", "geneStart", "geneEnd")
-vst_meta <- cbind(peak_meta[, meta_cols], vst_mat)
+vst_meta <- cbind(peak_meta[, meta_cols], mat_batch4)
 vst_meta <- vst_meta[!grepl("^Gm|Rik$", vst_meta$SYMBOL), ]
-
+vst_meta
 base::saveRDS(vst_meta, "vst_meta.rds")
 ```
 
@@ -202,7 +233,7 @@ write.table(top_regions_bed, "top_4000_variable_regions.bed", sep = "\t", row.na
 ```
 
 ```{r}
-mat_batch
+dim(mat_batch)
 # Calculate the standard deviation for each row
 batch_std_dev <- apply(mat_batch, 1, sd)
 
@@ -218,7 +249,7 @@ top_regions <- top_regions[1:4000, ]
 
 
 ```{r}
-pca <- prcomp(t(mat_batch))
+pca <- prcomp(t(mat_batch4))
 percent_var <- round(100 * (pca$sdev^2) / sum(pca$sdev^2), 1)
 
 pc_df <- data.frame(
@@ -228,43 +259,56 @@ pc_df <- data.frame(
   sample = colnames(vsd)
 )
 
-ggplot(pc_df, aes(x = PC1, y = PC2, color = condition, label = sample)) +
+pca <- ggplot(pc_df, aes(x = PC1, y = PC2, color = condition, label = sample)) +
   geom_point(size = 3) +  # Scatter plot
-  geom_text(vjust = 1.5, hjust = 1.5) +  # Add sample labels
+  geom_text(vjust = 1.0, hjust = 1.0) +  # Add sample labels
   theme_minimal() +
   labs(
-    title = "PCA Plot of ATACseq Dataset",
+    title = "PCA of ATACseq Samples",
     x = paste0("PC1 (", round(100 * (pca$sdev[1]^2) / sum(pca$sdev^2), 1), "%)"),
     y = paste0("PC2 (", round(100 * (pca$sdev[2]^2) / sum(pca$sdev^2), 1), "%)")
   )
+pca
+ggsave(pc_df, "/Users/jbrink/Gracz.sox9/pca_atac_neg_pos.svg")
 ```
 
 ```{r}
 vst_meta
 vst_meta[, "annotation_summary"] <- str_split_i(vst_meta$annotation, " ", 1)
 
-res_df <- as.data.frame(res_shk)
-
+res_df <- as.data.frame(res)
+summary(res)
 
 res_meta <- cbind(res_df, peak_meta)
 res_meta[, "annotation_summary"] <- str_split_i(res_meta$annotation, " ", 1)
 res_meta
 
-res_clean <- res_meta[, -6] # Drop the name col of NA
+res_clean <- res_meta[, -7] # Drop the name col of NA
 
 
 res_clean <- res_clean %>%
   mutate(X1 = paste0("chr", X1))
 
 res_clean <- res_clean[!grepl("^Gm|Rik$|Mup$", res_clean$SYMBOL), ]
+res_clean
+
+# Remove rows with NA values in padj or log2FoldChange
+res_clean <- res_clean %>%
+  filter(!is.na(padj) & !is.na(log2FoldChange))
+```
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(res_clean,
+                lab = res_clean$SYMBOL,
+                x = 'log2FoldChange',
+                y = 'pvalue')
+
 ```
 
 
 ```{r}
 res_clean
-# Remove rows with NA values in padj or log2FoldChange
-res_clean <- res_clean %>%
-  filter(!is.na(padj) & !is.na(log2FoldChange))
 
 padj_threshold <- 0.1
 log2FC_threshold <- 0.5
@@ -313,8 +357,8 @@ colnames(down_regulated)
 ```
 
 ```{r}
-plot_cts <- vst_meta[order(res_clean$padj)[1:138], ]
-plot_cts <- vst_meta[order(res_clean$log2FoldChange), ]
+plot_cts <- mat_batch4[order(res_clean$padj)[1:138], ]
+plot_cts <- mat_batch4[order(res_clean$log2FoldChange), ]
 plot_cts <- as.data.frame(plot_cts)
 
 plot_cts$SYMBOL <- make.unique(plot_cts$SYMBOL)
@@ -330,7 +374,7 @@ plot_cts
 ```
 
 ```{r}
-res_meta <- res_meta[!grepl("^Gm|Rik$|Mup$|Cyp2e1", res_meta$SYMBOL), ]
+res_meta <- res_meta[!grepl("^Gm|Rik$|Mup$", res_meta$SYMBOL), ]
 res_meta$significant <- with(res_meta, padj < 0.1 & abs(log2FoldChange) > 1)
 
 ggplot(res_meta, aes(x = log2FoldChange, y = -log10(padj), color = significant)) +
@@ -353,7 +397,7 @@ ggplot(res_meta, aes(x = log2FoldChange, y = -log10(padj), color = significant))
 ```
 
 ```{r}
-plotAnnoPie(peak_annotation)
+plotAnnoPie(peak_anno)
 ```
 
 ```{r goterm of intergenic, intronic, promoter elements}
