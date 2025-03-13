@@ -1,0 +1,146 @@
+---
+title: "integrate_atac_rna_pos_neg_gfp"
+output: html_notebook
+---
+
+```{r}
+library(readr)
+rnaseq_adj_counts <- read_csv("src/rna/rnaseq_adj_counts_gfp.csv")
+rnaseq_res_gfp <- read_csv("src/rna/rnaseq_res_gfp.csv")
+View(rnaseq_res_gfp)
+View(rnaseq_adj_counts)
+
+atac_vsd <- readRDS("~/Gracz.sox9/src/atac/atac_vsd.rds")
+atac_batch_cts <- readRDS("~/Gracz.sox9/src/atac/atac_batch_cts.rds")
+results_atac <- readRDS("~/Gracz.sox9/src/atac/results_atac.rds")
+```
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(DESeq2)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+```
+
+```{r}
+atac_gr <- atac_vsd@rowRanges
+res_bed <- filt_peaks_counts[, !colnames(filt_peaks_counts) %in% c("2214N", "2214P", "2319N", "2319P", "2341N", "2341P")]
+res_bed <- makeGRangesFromDataFrame(res_bed, keep.extra.columns = TRUE)
+peak_anno <- annotatePeak(atac_gr, 
+                                TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
+                                annoDb = "org.Mm.eg.db",
+                                genomicAnnotationPriority = c("Promoter", "5UTR", "3UTR", "Exon", "Intron", "Downstream", "Intergenic"),
+                                tssRegion = c(-3000, 3000)
+)
+peak_anno <- as.data.frame(peak_anno@anno)
+res_anno <- cbind(results_atac, peak_anno)
+
+res_anno_clean <- res_anno[!grepl("^Gm|Rik$|Mup$", res_anno$SYMBOL), ]
+res_anno_clean
+```
+
+
+```{r}
+res_anno_clean <- res_anno[!grepl("^Gm|Rik$|Mup$", res_anno$SYMBOL), ]
+res_anno_clean[, "annotation_summary"] <- str_split_i(res_anno_clean$annotation, " ", 1)
+```
+
+
+```{r}
+res_anno_clean
+# Split by the annotation_column
+split_by_annotation <- function(df, annotation_column) {
+  df <- df[!is.na(df$padj), ]
+  split_df <- split(df, df[[annotation_column]])
+  
+  # Return the split dfds as a list
+  return(split_df)
+}
+```
+
+
+```{r}
+split_data <- split_by_annotation(res_anno_clean, "annotation_summary")
+
+# Access the subsets
+intron_df <- split_data[["Intron"]]
+promoter_df <- split_data[["Promoter"]]
+distal_df <- split_data[["Distal"]]
+write.csv(combined_distal, '/Users/jbrink/Gracz.sox9/src/integrate/distal_rna_gfpRes_df.csv')
+```
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(promoter_df,
+                lab = promoter_df$SYMBOL,
+                x = 'log2FoldChange',
+                y = 'pvalue',
+                title = "Significantly changed promoter regions",
+    pointSize = 1.0,
+    labSize = 2.0,
+    col=c('black', 'black', 'black', 'red3'),
+    colAlpha = 1,
+    boxedLabels = TRUE,
+    drawConnectors = TRUE,
+    widthConnectors = 1.0,
+    colConnectors = 'black'
+)
+
+promoter_df
+
+```
+
+```{r}
+library(readr)
+rnaseq_res_gfp <- read_csv("src/rna/rnaseq_res_gfp.csv")
+#need to rename column "...1" to "SYMBOL"
+colnames(rnaseq_res_gfp)[colnames(rnaseq_res_gfp) == "...1"] <- "SYMBOL"
+
+rnaseq_res_gfp$source <- "RNA-seq"
+intron_df$source <- "ATAC-seq"
+promoter_df
+
+combined_prom <- merge(rnaseq_res_gfp, promoter_df, by = "SYMBOL")
+colnames(combined_prom)[colnames(combined_prom) == "log2FoldChange.x"] <- "log2FC_RNAseq"
+colnames(combined_prom)[colnames(combined_prom) == "log2FoldChange.y"] <- "log2FC_ATACseq"
+
+cor_value <- cor(combined_int$log2FC_RNAseq, combined_int$log2FC_ATACseq, use = "complete.obs")
+
+#combined_df$significant <- combined_df$padj.x < 0.05 | combined_df$padj.y < 0.05 
+```
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+combined_distal["RNA_LFC_scaled"] = scale(combined_distal$log2FC_RNAseq)
+combind
+
+# Create scatter plot with boxed labels and non-overlapping text
+ggplot(combined_prom, aes(x = log2FC_RNAseq, y = log2FC_ATACseq)) +
+  geom_point(alpha = 0.5, color="blue") +  # Plot all points
+  geom_label_repel(
+    data = subset(combined_prom, abs(log2FC_RNAseq) >= 3.5 | abs(log2FC_ATACseq) >= 3.5),  # Label only points meeting the condition
+    aes(label = SYMBOL), 
+    color = "black",          # Text color
+    fill = "white",           # Background color of the box
+    size = 3,                # Text size
+    box.padding = 0.5,        # Adjust spacing around the box
+    max.overlaps = Inf,       # Allow unlimited overlaps (or set a finite number)
+    segment.color = "gray",   # Color of the line connecting the label to the point
+    segment.size = 0.5,       # Thickness of the connecting line
+    min.segment.length = 0.2  # Minimum length of the connecting line
+  ) +
+  #geom_smooth(method = "lm", color = "red", se = TRUE) +  # Add regression line
+  labs(
+    x = "RNA-seq log2 Fold Change",
+    y = "ATAC-seq log2 Fold Change",
+    title = "Integration of RNA-seq and ATAC-seq Distal-Enhancers"
+  ) +
+  theme_minimal()
+
+
+```
+
