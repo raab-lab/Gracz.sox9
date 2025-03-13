@@ -1,0 +1,127 @@
+---
+title: "h3k27ac_dar"
+output: html_notebook
+---
+```{r}
+library(DESeq2)
+library(plyranges)
+library(tidyverse)
+library(ComplexHeatmap)
+library(msigdbr)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(clusterProfiler)
+library(EnhancedVolcano)
+library(reshape)
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(dplyr)
+```
+
+```{r}
+load("~/Gracz.sox9/src/cnt/20250311k27ac_ocr_counts.Rdata")
+ace_counts <- ocr_counts
+ace_counts@colData
+
+file_paths <- ace_counts$bam.files #need to peform substitution of a matched pattern in a string i.e. bam file names
+# Updated regular expression
+regex <- "(\\d+)_\\d+_Sox9[NP]_H3K27ac_\\d+_mapq10_filtered\\.sorted\\.bam"
+
+# wokring on my function writing
+mouse_ids <- sapply(file_paths, function(x) {
+  match <- regmatches(x, regexec(regex, x))
+  if (length(match[[1]]) > 1) {
+    return(match[[1]][2])  # Return the captured group (mouse ID)
+  } else {
+    return(NA)
+  }
+})
+
+print(mouse_ids)
+
+assayNames(ace_counts)
+count_mat <- assay(ace_counts)
+colnames(ace_counts) <- mouse_ids #added mouse id to column name in rangedsumexp.
+colnames(count_mat) <- colnames(ace_counts) #added mouse id to column name in counts mat
+count_mat #count matrix coldata labelled with mouse id
+```
+
+```{r}
+ace_counts@rowRanges #chM present must drop
+filtered_rowRanges <- ace_counts@rowRanges[-c(11596, 11597, 11598)]
+granges_df <- as.data.frame(filtered_rowRanges)
+
+# Update the rowRanges slot in ocr_counts
+ace_counts@rowRanges <- filtered_rowRanges
+ace_counts@assays <- ace_counts@assays[-c(11596, 11597, 11598)] #dropped chM rows from counts table
+
+assayNames(ace_counts)
+count_mat <- assay(ace_counts) #add count data to matrix
+count_mat_grange <- cbind(count_mat, granges_df)#this count matrix is rows are grange, col are sample and excludes chM
+
+write.csv(count_mat_grange, "/Users/jbrink/Gracz.sox9/src/cnt/20250313_counts_matrix_pos_neg_k27ac.csv") #saving
+
+#need to remove all rows in count mat where peaks are not found in 2/3 samples per condition
+# Define replicates for each condition
+condition_N <- c("1", "5", "9") 
+condition_P <- c("11", "3", "7")
+
+min_count <- 1
+
+# Filter peaks present in at least 2 replicates in either condition
+keep <- (rowSums(count_mat[, condition_N] >= min_count) >= 2) |
+        (rowSums(count_mat[, condition_P] >= min_count) >= 2)
+
+sum(keep)
+filt_count_mat <- count_mat[keep, ] #filtered out ~50 peaks
+
+
+count_mat_grange <- count_mat_grange[keep, ]
+filt_peaks <- count_mat_grange[, 7:ncol(count_mat_grange)]
+filt_peaks_gr <- GRanges(
+              seqnames = count_mat_grange$seqnames,
+              ranges = IRanges(start = count_mat_grange$start, end = count_mat_grange$end),
+              strand = count_mat_grange$strand
+)
+
+```
+
+```{r}
+length(filt_count_mat)
+
+samp_info <- data.frame(row.names = colnames(filt_count_mat),
+                        condition = c('neg', 'pos', 'pos', 'neg', 'pos', 'neg'),
+                        mouse = c('1', '11','3', '5', '7', '9') #there has to be a better way to do this 
+)
+samp_info
+
+dds <- DESeqDataSetFromMatrix(countData = filt_count_mat,
+                              colData = samp_info,
+                              design = ~condition)
+colData(dds)
+vsd <- vst(dds, blind = TRUE)
+ace_pca <- plotPCA(vsd, intgroup = "condition")
+ggsave(plot = ace_pca, 
+        filename = "/Users/jbrink/Gracz.sox9/src/cnt/neg_pos_ace_pca.svg",
+        width = 8,  # Width in inches
+        height = 6, # Height in inches
+        dpi = 300   # Resolution in dots per inch
+      )
+)
+```
+
+```{r}
+dds <- DESeq(dds)
+results <- results(dds)
+summary(results)
+```
+
+```{r}
+results
+
+vsd
+vsd@rowRanges <- filt_peaks_gr
+vsd@rowRanges
+
+saveRDS(results, "/Users/jbrink/Gracz.sox9/src/cnt/results_ace.rds")
+saveRDS(vsd,"/Users/jbrink/Gracz.sox9/src/cnt/ace_vsd.rds")
+```
