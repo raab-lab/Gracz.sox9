@@ -1,0 +1,179 @@
+---
+title: "integrate_h3k27ac_rna"
+output: html_notebook
+---
+
+```{r}
+library(readr)
+rnaseq_adj_counts <- read_csv("src/rna/rnaseq_adj_counts_gfp.csv")
+rnaseq_res_gfp <- read_csv("src/rna/rnaseq_res_gfp.csv")
+View(rnaseq_res_gfp)
+View(rnaseq_adj_counts)
+
+ace_res <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/results_ace.rds")
+ace_vsd <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/ace_vsd.rds")
+count_mat_grange <- read.csv("/Users/jbrink/Gracz.sox9/src/cnt/20250313_counts_matrix_pos_neg_k27ac.csv")
+```
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(DESeq2)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(ReactomePA)
+```
+
+```{r}
+ace_gr <- ace_vsd@rowRanges
+
+peak_anno <- annotatePeak(ace_gr, 
+                                TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene, 
+                                annoDb = "org.Mm.eg.db",
+                                genomicAnnotationPriority = c("Promoter", "5UTR", "3UTR", "Exon", "Intron", "Downstream", "Intergenic"),
+                                tssRegion = c(-3000, 3000)
+)
+plotAnnoPie(peak_anno)
+plotDistToTSS(peak_anno,
+              title="Distribution of transcription factor-binding loci relative to TSS")
+
+
+peak_anno@anno
+
+peak_anno <- as.data.frame(peak_anno@anno)
+res_anno <- cbind(ace_res, peak_anno)
+
+res_anno_clean <- res_anno[!grepl("^Gm|Rik$|Mup$", res_anno$SYMBOL), ]
+res_anno_clean[, "annotation_summary"] <- str_split_i(res_anno_clean$annotation, " ", 1)
+# Split by the annotation_column
+split_by_annotation <- function(df, annotation_column) {
+  df <- df[!is.na(df$padj), ]
+  split_df <- split(df, df[[annotation_column]])
+  
+  # Return the split dfds as a list
+  return(split_df)
+}
+split_data <- split_by_annotation(res_anno_clean, "annotation_summary")
+
+# Access the subsets
+intron_df <- split_data[["Intron"]]
+promoter_df <- split_data[["Promoter"]]
+distal_df <- split_data[["Distal"]]
+```
+
+```{r}
+library(EnhancedVolcano)
+EnhancedVolcano(promoter_df,
+                lab = intron_df$SYMBOL,
+                x = 'log2FoldChange',
+                y = 'pvalue',
+                title = "Significantly changed regions marked by H3K27ac",
+    pointSize = 1.0,
+    labSize = 2.0,
+    col=c('black', 'black', 'black', 'red3'),
+    colAlpha = 1,
+    boxedLabels = TRUE,
+    drawConnectors = TRUE,
+    widthConnectors = 1.0,
+    colConnectors = 'black'
+)
+```
+
+```{r}
+colnames(rnaseq_res_gfp)[colnames(rnaseq_res_gfp) == "...1"] <- "SYMBOL"
+
+rnaseq_res_gfp$source <- "RNA-seq"
+promoter_df$source <- "H3K27ac-seq"
+combined_prom
+
+combined_prom <- merge(rnaseq_res_gfp, promoter_df, by = "SYMBOL")
+colnames(combined_prom)[colnames(combined_prom) == "log2FoldChange.x"] <- "log2FC_RNAseq"
+colnames(combined_prom)[colnames(combined_prom) == "log2FoldChange.y"] <- "log2FC_H3K27ac"
+
+cor_value <- cor(combined_prom$log2FC_RNAseq, combined_prom$log2FC_H3K27ac, use = "complete.obs")
+```
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+combined_distal["RNA_LFC_scaled"] = scale(combined_distal$log2FC_RNAseq)
+combind
+
+# Create scatter plot with boxed labels and non-overlapping text
+ggplot(combined_prom, aes(x = log2FC_RNAseq, y = log2FC_H3K27ac)) +
+  geom_point(alpha = 0.5, color="black") +  # Plot all points
+  geom_label_repel(
+    data = subset(combined_prom, abs(log2FC_RNAseq) >= 2.5 | abs(log2FC_H3K27ac) >= 2.5),  # Label only points meeting the condition
+    aes(label = SYMBOL), 
+    color = "black",          # Text color
+    fill = "white",           # Background color of the box
+    size = 3,                # Text size
+    box.padding = 0.5,        # Adjust spacing around the box
+    max.overlaps = Inf,       # Allow unlimited overlaps (or set a finite number)
+    segment.color = "black",   # Color of the line connecting the label to the point
+    segment.size = 0.5,       # Thickness of the connecting line
+    min.segment.length = 0.2  # Minimum length of the connecting line
+  ) +
+  #geom_smooth(method = "lm", color = "red", se = TRUE) +  # Add regression line
+  labs(
+    x = "RNA-seq log2 Fold Change",
+    y = "H3K27ac log2 Fold Change",
+    title = "Integration of RNA-seq and H3K27ac marked Distal Enhancers"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+heat <- subset(combined_prom, abs(log2FC_RNAseq) >= 2.5 | abs(log2FC_H3K27ac) >= 2.5)
+library(dplyr)
+# Convert DFrame to data.frame
+combined_prom_df <- as.data.frame(combined_prom)
+# Make gene symbols unique by appending a suffix
+combined_prom_df <- combined_prom_df %>%
+  group_by(SYMBOL) %>%
+  mutate(SYMBOL = ifelse(n() > 1, paste0(SYMBOL, "_", row_number()), SYMBOL)) %>%
+  ungroup()
+
+# Extract relevant columns and set row names
+log2fc_data <- combined_prom_df %>%
+  group_by(SYMBOL) %>%
+  summarise(
+    log2FC_RNAseq = mean(log2FC_RNAseq, na.rm = TRUE),
+    log2FC_H3K27ac = mean(log2FC_H3K27ac, na.rm = TRUE)
+  ) %>%
+  column_to_rownames(var = "SYMBOL")
+# Compute z-scores for normalization
+log2fc_zscore <- scale(log2fc_data)
+# Convert matrix to data frame for easier handling
+log2fc_zscore_df <- as.data.frame(log2fc_zscore)
+
+# Remove rows with any NA, NaN, or Inf values
+log2fc_zscore_clean <- log2fc_zscore_df[complete.cases(log2fc_zscore_df), ]
+
+# Convert back to matrix
+log2fc_zscore_clean <- as.matrix(log2fc_zscore_clean)
+
+set.seed(123)  # For reproducibility
+kmeans_result <- kmeans(log2fc_zscore_clean, centers = 3)
+
+library(ComplexHeatmap)
+library(circlize)
+
+Heatmap(
+  log2fc_zscore_clean,
+  name = "Z-score",
+  column_names_rot = 0,  # Make column names horizontal
+  show_row_names = FALSE,  # Hide row names
+  split = kmeans_result$cluster,  # Split rows by k-means clusters
+  column_title = "Z-score Normalized log2FC (RNA-seq and Promoter H3K27ac)",
+  row_title = "Genes",
+  col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))  # Color gradient
+)
+```
+
+```{r}
+
+```
+

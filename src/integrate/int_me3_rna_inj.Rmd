@@ -1,0 +1,152 @@
+---
+title: "int_me3_rna_inj"
+output: html_notebook
+---
+```{r}
+library(readr)
+rna_res <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20241010_DEG_FIG3_noMups_shrunkres.csv")
+rna_cts <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20241010_uninj_inj_counts.csv")
+
+me_res <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/results_me.rds")
+me_vsd <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/me_vsd.rds")
+```
+
+```{r}
+me_ranges <- me_vsd@rowRanges
+me_anno <- annotatePeak(me_ranges,
+                        tssRegion = c(-3000,3000),
+                        TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                        annoDb = "org.Mm.eg.db"
+                        )
+
+me_anno <- as.data.frame(me_anno)
+me_res <- cbind(me_res, me_anno)
+
+me_cts <- assay(me_vsd)
+me_res_ct <- cbind(me_res, me_cts)
+sig_me <- me_res_ct[which(me_res_ct$padj < 0.1), ]
+sig_me <- sig_me[!grepl("^Gm|Rik$|Mup$", sig_me$SYMBOL), ]
+  
+me_res_ct[which(!is.na(me_res_ct$SYMBOL) & me_res_ct$SYMBOL == "Fgfr1"), ] #wtf
+sig_me
+```
+
+```{r}
+me_res_clean <- me_res_ct[!grepl("^Gm|Rik$|Mup$", me_res_ct$SYMBOL), ]
+
+me_volcano <- EnhancedVolcano(me_res_clean,
+                lab = me_res_clean$SYMBOL,
+                x = 'log2FoldChange',
+                y = 'padj',
+                title = "H3K27me3 results: Sox9- v Sox9+",
+                pointSize = 2.0,
+                labSize = 3.0,
+                labCol = 'black',
+                boxedLabels = TRUE,
+                drawConnectors = TRUE,
+                widthConnectors = 0.5,
+                colConnectors = 'black',
+                pCutoff = 0.1,
+                col=c('black', 'black', 'black', 'red3'),
+                colAlpha = 1)
+```
+
+```{r}
+me_res_clean[, "annotation_summary"] <- str_split_i(me_res_clean$annotation, " ", 1)
+plot_sig_me <- me_res_clean[which(me_res_clean$padj < 0.1), ]
+me_df <- as.data.frame(plot_sig_me)
+me_plot <- me_df %>%
+  dplyr::select(SYMBOL, log2FoldChange)#dont use this df
+
+ggplot(me_plot, aes(x = SYMBOL, y = log2FoldChange, fill = SYMBOL)) + 
+  geom_violin(trim = FALSE, scale = "width") +
+  geom_jitter(width = 0.2, size = 0.7, alpha = 0.5) +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(size = 10, face = "bold")) +
+  labs(
+    title = "Significant H3K27me3 Marked Regions by Annotation Type",
+    x = "Genomic Region",
+    y = "Effect Size (LFC)")
+```
+
+```{r}
+rna_cts
+overlaps <- intersect(rna_cts$X, me_df$SYMBOL)
+overlaps
+length(overlaps)
+me_plot <- rna_cts[rna_cts$X %in% overlaps, ]
+me_plot <- me_plot %>%
+  dplyr::rename(
+    SYMBOL = X,
+    Uninjured_1 = X1_Ms1373_sox9.egfp_chow_1,
+    Uninjured_2 = X1_Ms1638_sox9.egfp_chow_2,
+    Uninjured_3 = X1_Ms1710_sox9.egfp_chow_3,
+    Uninjured_4 = X1_Ms1724_sox9.egfp_chow_4,
+    Injured_1 = X1_Ms1153_sox9.egfp_6wk.ddc_1,
+    Injured_2 = X1_Ms1154_sox9.egfp_6wk.ddc_2,
+    Injured_3 = X1_Ms1176_sox9.egfp_6wk.ddc_3,
+    Injured_4 = X1_Ms1607_sox9.egfp_6wk.ddc_4
+  )
+rownames(me_plot) <- me_plot$SYMBOL
+col_fun <- colorRamp2(
+  breaks = c(-2, 0, 2), 
+  colors = rev(brewer.pal(n = 3, name = "BrBG"))
+)
+
+mat <- as.matrix(me_plot[,2:9])
+gene_z_scores <- t(scale(t(mat)))
+
+condition <- ifelse(grepl("Uninjured", colnames(gene_z_scores)), "Uninjured", "Injured")
+condition <- factor(condition, levels = c("Uninjured", "Injured"))
+
+
+condition_colors <- c(Uninjured = "#66c2a5", Injured = "#fc8d62") 
+column_ha <- HeatmapAnnotation(
+  Condition = condition,
+  col = list(Condition = condition_colors),
+  annotation_name_side = "left"
+)
+
+Heatmap(gene_z_scores,
+      name = "Z-score",
+      col = col_fun,
+      top_annotation = column_ha,
+      cluster_columns = FALSE,
+      cluster_rows = TRUE,
+      row_names_gp = gpar(fontsize = 10),
+      show_column_names = FALSE)
+
+
+```
+
+```{r}
+me_plot_long <- me_plot %>%
+  pivot_longer(
+    cols = -SYMBOL,
+    names_to = "sample",
+    values_to = "expression"
+  ) %>%
+  mutate(
+    condition = ifelse(str_detect(sample, "Uninjured"), "Uninjured", "Injured")
+  )
+
+ggplot(me_plot_long, aes(x = condition, y = expression, fill = condition)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.6) +
+  facet_wrap(~ SYMBOL, scales = "free_y") +
+  labs(
+    title = "Expression by Condition of Signficantly Altered H3K27me3 Genes",
+    x = "Condition",
+    y = "Expression (VST)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 10)
+  )
+```
+
+```{r}
+me_res <- rna_res[rna_res$symbol %in% overlaps, ]
+me_res
+```

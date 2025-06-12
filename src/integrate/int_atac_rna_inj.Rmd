@@ -1,0 +1,225 @@
+---
+title: "integrate_atac_rna_inj"
+output: html_notebook
+---
+```{r}
+library(readr)
+library(tidyverse)
+library(dplyr)
+
+rna_res <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20241010_DEG_FIG3_noMups_shrunkres.csv")
+rna_cts <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20241010_uninj_inj_counts.csv")
+```
+
+```{r}
+dups <- rna_cts[duplicated(rna_cts$X)|duplicated(rna_cts$X, fromLast=TRUE), ]
+dups #multiple IDs that biomart mapped to a single gene. i will just keep them all
+```
+```{r}
+sum(duplicated(rna_cts$X)) #18 gene duplicates. some of them seem more relevant in chromatin assays than others
+```
+
+```{r}
+#peak to gene mapping of homeostatic dar from atac and deg from injured hybrid heps
+atac_vsd <- readRDS("~/Gracz.sox9/src/atac/atac_vsd.rds")
+atac_cts <- readRDS("~/Gracz.sox9/src/atac/atac_batch_cts.rds")
+atac_res <- readRDS("~/Gracz.sox9/src/atac/results_atac.rds")
+
+#ace_res <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/results_ace.rds")
+#ace_vsd <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/ace_vsd.rds")
+#me_res <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/results_me.rds")
+#me_vsd <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/me_vsd.rds")
+```
+
+```{r}
+summary(atac_res) #lfc Up = 116, lfc down = 17. lots of low counts
+plotMA(atac_res, alpha = 0.1)
+```
+
+```{r}
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+atac_ranges <- atac_vsd@rowRanges
+atac_anno <- annotatePeak(atac_ranges,
+                          tssRegion = c(-3000, 3000),
+                          TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                          annoDb = "org.Mm.eg.db"
+                          )
+atac_anno <- as.data.frame(atac_anno@anno)
+atac_res <- cbind(atac_res, atac_anno)
+#atac_counts <- cbind(atac_counts, atac_anno)
+#atac_res
+sig_peaks <- atac_res[which(atac_res$padj < 0.1), ]
+sig_peaks
+sig_peaks_clean <- sig_peaks[!grepl("^Gm|Rik$|Mup$", sig_peaks$SYMBOL), ]
+sig_peaks_clean[, "annotation_summary"] <- str_split_i(sig_peaks_clean$annotation, " ", 1)
+sig_peaks_clean
+
+#find overlaps between rna and atac res
+overlaps <- intersect(rna_cts$X, sig_peaks_clean$SYMBOL)
+length(overlaps)
+to_plot <- rna_cts[rna_cts$X %in% overlaps, ]
+dim(to_plot)
+to_plot <- to_plot %>%
+  dplyr::rename(
+    #SYMBOL = X,
+    Uninjured_1 = X1_Ms1373_sox9.egfp_chow_1,
+    Uninjured_2 = X1_Ms1638_sox9.egfp_chow_2,
+    Uninjured_3 = X1_Ms1710_sox9.egfp_chow_3,
+    Uninjured_4 = X1_Ms1724_sox9.egfp_chow_4,
+    Injured_1 = X1_Ms1153_sox9.egfp_6wk.ddc_1,
+    Injured_2 = X1_Ms1154_sox9.egfp_6wk.ddc_2,
+    Injured_3 = X1_Ms1176_sox9.egfp_6wk.ddc_3,
+    Injured_4 = X1_Ms1607_sox9.egfp_6wk.ddc_4
+  )
+
+uninj_samp <- to_plot[, 2:5]
+uninj_avg <- rowMeans(uninj_samp)
+to_plot$Uninjured <- uninj_avg
+
+inj_samp <- to_plot[, 6:9]
+inj_avg <- rowMeans(inj_samp)
+to_plot$Injured <- inj_avg
+rownames(to_plot) <- to_plot$SYMBOL
+
+dim(to_plot)
+to_plot_anno <- to_plot %>%
+  left_join(dplyr::select(sig_peaks_clean.df, SYMBOL, annotation_summary),
+            by = "SYMBOL")
+colnames(to_plot_anno)
+colnames(to_plot)
+```
+
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+col_fun <- colorRamp2(
+  breaks = c(-2, 0, 2), 
+  colors = rev(brewer.pal(n = 3, name = "BrBG"))
+)
+mat <- as.matrix(to_plot[,2:9])
+
+Heatmap(gene_z_scores,
+        split = to_plot_anno$annotation_summary,
+        )
+gene_z_scores <- t(scale(t(mat)))
+
+z_scores
+condition <- ifelse(grepl("Uninjured", colnames(gene_z_scores)), "Uninjured", "Injured")
+condition <- factor(condition, levels = c("Uninjured", "Injured"))
+
+# color mapping
+condition_colors <- c(Uninjured = "#66c2a5", Injured = "#fc8d62") 
+column_ha <- HeatmapAnnotation(
+  Condition = condition,
+  col = list(Condition = condition_colors),
+  annotation_name_side = "left"
+)
+
+ht <- Heatmap(heatmap_mat,
+                        name = "Z-score",
+                        col = col_fun,
+                        top_annotation = column_ha,
+                        cluster_columns = TRUE,
+                        cluster_rows = TRUE,
+                        row_names_gp = gpar(fontsize = 10),
+                        show_column_names = FALSE)
+draw(ht)
+```
+
+```{r}
+atac_res$highlight <- ifelse(atac_res$SYMBOL %in% overlaps, "highlight", "other")
+atac_res <- atac_res[!grepl("^Gm|Rik$|Mup$", atac_res$SYMBOL), ]
+sig_peaks_clean
+ggplot(atac_res, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = highlight), alpha = 0.7) +
+  scale_color_manual(values = c("highlight" = "red", "other" = "grey")) +
+  geom_text_repel(data = subset(atac_res, highlight == "highlight"),
+                  aes(label = SYMBOL),
+                  max.overlaps = 20) +
+  theme_minimal() +
+  labs(title = "ATAC-seq Injury Results of Genes Altered in ATAC",
+       x = "log2 Fold Change",
+       y = "-log10 Adjusted P-value")
+
+atac_res_volcano_homeo <- EnhancedVolcano(atac_res,
+                lab = atac_res$SYMBOL,
+                x = 'log2FoldChange',
+                y = 'padj',
+                title = "ATAC results: Sox9+ v Sox9-",
+                pointSize = 2.0,
+                labSize = 3.0,
+                labCol = 'black',
+                boxedLabels = TRUE,
+                drawConnectors = TRUE,
+                widthConnectors = 0.5,
+                colConnectors = 'black',
+                pCutoff = 0.1,
+                col=c('black', 'black', 'black', 'red3'),
+                colAlpha = 1)
+```
+
+```{r}
+#violin plots breaking down annotation summary peak counts in each condition
+sig_peaks_clean
+atac_counts <- assay(atac_vsd)
+colnames(atac_res)
+atac_res[, "annotation_summary"] <- str_split_i(atac_res$annotation, " ", 1)
+atac_counts_res <- cbind(atac_res, atac_counts)
+atac_counts_res <- atac_counts_res[which(atac_res$padj < 0.1), ]
+atac_counts_res <- atac_counts_res[!grepl("^Gm|Rik$|Mup$", atac_counts_res$SYMBOL), ]
+
+
+n_cols <- c("2214N", "2319N", "2341N")
+p_cols <- c("2214P", "2319P", "2341P")
+atac_counts_res$Negative <- rowMeans(as.matrix(atac_counts_res[, n_cols]))
+atac_counts_res$Positive <- rowMeans(as.matrix(atac_counts_res[, p_cols]))
+class(atac_counts_res)
+```
+```{r}
+atac_counts_res.df <- as.data.frame(atac_counts_res)
+dim(atac_counts_res)
+long_df <- atac_counts_res.df %>%
+  dplyr::select(annotation_summary, Negative, Positive) %>%
+  pivot_longer(cols = c(Negative, Positive),
+               names_to = "condition",
+               values_to = "value")
+dim(atac_counts_res)
+
+ggplot(long_df, aes(x = condition, y = value, fill = condition)) +
+  geom_violin(trim = FALSE, scale = "width") +
+  geom_jitter(width = 0.2, size = 0.7, alpha = 0.5) +
+  facet_wrap(~ annotation_summary, scales = "free_y") +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(size = 10, face = "bold")) +
+  labs(
+    title = "Significant Accessibility by Annotation Type",
+    x = "Condition",
+    y = "Signal (VST counts)")
+
+```
+
+```{r}
+atac_counts_res.df
+sig_rna <- rna_res[which(rna_res$padj < 0.1), ]
+to_venn_rna <- sig_rna$symbol
+to_venn_atac <- atac_counts_res.df$SYMBOL
+venn <- list(to_venn_rna, to_venn_atac)
+library(ggvenn)
+# install.packages("ggvenn") # if not already installed
+library(ggvenn)
+
+venn <- list(RNA = to_venn_rna, ATAC = to_venn_atac)
+
+ggvenn(
+  venn,
+  fill_color = c("skyblue", "salmon"),
+  stroke_size = 0.5,
+  set_name_size = 5
+)
+```
+
+

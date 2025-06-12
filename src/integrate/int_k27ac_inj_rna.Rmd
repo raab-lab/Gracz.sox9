@@ -1,0 +1,188 @@
+---
+title: "integrate_k27_inj_rna"
+output: html_notebook
+---
+
+```{r}
+library(readr)
+rna_res <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20241010_DEG_FIG3_noMups_shrunkres.csv")
+rna_cts <- read.csv("~/Desktop/Lab2024/gracz.sox9_archive/rna/20241010_uninj_inj_counts.csv")
+
+ace_res <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/results_ace.rds")
+ace_vsd <- readRDS("/Users/jbrink/Gracz.sox9/src/cnt/ace_vsd.rds")
+
+ace_res <- ace_res[which(ace_res$padj < 0.1), ]
+ace_counts_res
+```
+
+```{r}
+ace_vsd@colData
+
+ace_ranges <- ace_vsd@rowRanges
+ace_anno <- annotatePeak(ace_ranges,
+                          tssRegion = c(-3000, 3000),
+                          TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                          annoDb = "org.Mm.eg.db"
+                          )
+
+ace_anno <- as.data.frame(ace_anno)
+ace_res <- cbind(ace_res, ace_anno)
+
+
+ace_counts <- assay(ace_vsd)
+colnames(ace_counts)
+ace_counts_res <- cbind(ace_res, ace_counts)
+ace_counts_res <- as.data.frame(ace_counts_res)
+ace_counts_res <- ace_counts_res[which(ace_counts_res$padj < 0.1), ]
+ace_counts_res <- ace_counts_res[!grepl("^Gm|Rik$|Mup$", ace_counts_res$SYMBOL), ]
+
+ace_counts_res <- ace_counts_res %>%
+  dplyr::rename(
+    NEGATIVE_1 = X1,
+    POSITIVE_1 = X11,
+    POSITIVE_2 = X3,
+    NEGATIVE_2 = X5,
+    POSITIVE_3 = X7,
+    NEGATIVE_3 = X9
+  )
+
+n_cols <- c("NEGATIVE_1", "NEGATIVE_2", "NEGATIVE_3")
+p_cols <- c("POSITIVE_1", "POSITIVE_2", "POSITIVE_3")
+ace_counts_res$Negative <- rowMeans(as.matrix(ace_counts_res[, n_cols]))
+ace_counts_res$Positive <- rowMeans(as.matrix(ace_counts_res[, p_cols]))
+ace_counts_res[, "annotation_summary"] <- str_split_i(ace_counts_res$annotation, " ", 1)
+```
+
+```{r}
+ace_res <- ace_res[!grepl("^Gm|Rik$|^Mup", ace_res$SYMBOL), ]
+ace_res_volcano <- EnhancedVolcano(ace_res,
+                lab = ace_res$SYMBOL,
+                x = 'log2FoldChange',
+                y = 'padj',
+                title = "H3K27ac results: Sox9+ v Sox9-",
+                pointSize = 2.0,
+                labSize = 3.0,
+                labCol = 'black',
+                boxedLabels = TRUE,
+                drawConnectors = TRUE,
+                widthConnectors = 0.5,
+                colConnectors = 'black',
+                pCutoff = 0.1,
+                col=c('black', 'black', 'black', 'red3'),
+                colAlpha = 1)
+```
+
+```{r}
+ace_counts_res
+plot_df <- ace_counts_res %>%
+  dplyr::select(annotation_summary, log2FoldChange)
+  #pivot_longer(cols = c(Negative, Positive),
+              # names_to = "condition",
+               #values_to = "value")
+
+
+ggplot(plot_df, aes(x = annotation_summary, y = log2FoldChange, fill = annotation_summary)) +
+  geom_violin(trim = FALSE, scale = "width") +
+  geom_jitter(width = 0.2, size = 0.7, alpha = 0.5) +
+  #facet_wrap(~ annotation_summary, scales = "free_y") +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(size = 10, face = "bold")) +
+  labs(
+    title = "Significant H3K27ac Marked Regions by Annotation Type",
+    x = "Genomic Region",
+    y = "Effect Size (LFC)")
+```
+
+```{r}
+rna_cts
+overlaps <- intersect(rna_cts$X, ace_counts_res$SYMBOL)
+overlaps
+length(overlaps)
+ace_plot <- rna_cts[rna_cts$X %in% overlaps, ]
+ace_plot <- ace_plot %>%
+  dplyr::rename(
+    SYMBOL = X,
+    Uninjured_1 = X1_Ms1373_sox9.egfp_chow_1,
+    Uninjured_2 = X1_Ms1638_sox9.egfp_chow_2,
+    Uninjured_3 = X1_Ms1710_sox9.egfp_chow_3,
+    Uninjured_4 = X1_Ms1724_sox9.egfp_chow_4,
+    Injured_1 = X1_Ms1153_sox9.egfp_6wk.ddc_1,
+    Injured_2 = X1_Ms1154_sox9.egfp_6wk.ddc_2,
+    Injured_3 = X1_Ms1176_sox9.egfp_6wk.ddc_3,
+    Injured_4 = X1_Ms1607_sox9.egfp_6wk.ddc_4
+  )
+rownames(ace_plot) <- ace_plot$SYMBOL
+col_fun <- colorRamp2(
+  breaks = c(-2, 0, 2), 
+  colors = rev(brewer.pal(n = 3, name = "BrBG"))
+)
+
+mat <- as.matrix(ace_plot[,2:9])
+gene_z_scores <- t(scale(t(mat)))
+
+condition <- ifelse(grepl("Uninjured", colnames(gene_z_scores)), "Uninjured", "Injured")
+condition <- factor(condition, levels = c("Uninjured", "Injured"))
+
+
+condition_colors <- c(Uninjured = "#66c2a5", Injured = "#fc8d62") 
+column_ha <- HeatmapAnnotation(
+  Condition = condition,
+  col = list(Condition = condition_colors),
+  annotation_name_side = "left"
+)
+
+ace_rna_heat <- Heatmap(gene_z_scores,
+      name = "Z-score",
+      col = col_fun,
+      top_annotation = column_ha,
+      cluster_columns = FALSE,
+      cluster_rows = TRUE,
+      row_names_gp = gpar(fontsize = 10),
+      show_column_names = FALSE)
+
+draw(ace_rna_heat)
+```
+
+```{r}
+colnames(rna_res)
+rna_res$highlight <- ifelse(rna_res$symbol %in% overlaps, "highlight", "other")
+rna_res <- rna_res[!grepl("^Gm|Rik$|Mup$", rna_res$symbol), ]
+
+ggplot(rna_res, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = highlight), alpha = 0.7) +
+  scale_color_manual(values = c("highlight" = "red", "other" = "grey")) +
+  geom_text_repel(data = subset(rna_res, highlight == "highlight"),
+                  aes(label = symbol),
+                  max.overlaps = 20) +
+  theme_minimal() +
+  labs(title = "RNAseq Injury Results of Altered H3K27ac Genes",
+       x = "log2 Fold Change",
+       y = "-log10 Adjusted P-value")
+```
+
+```{r}
+length(overlaps)
+tgfbr2
+```
+
+```{r}
+sig_rna <- rna_res[which(rna_res$padj < 0.1), ]
+to_venn_rna <- sig_rna$symbol
+to_venn_ace <- ace_counts_res$SYMBOL
+venn <- list(to_venn_rna, to_venn_ace)
+library(ggvenn)
+
+
+venn <- list(RNA = to_venn_rna, H3K27ac = to_venn_ace)
+venn2 <- list(H3K27ac = to_venn_ace, RNA = to_venn_rna)
+
+ggvenn(
+  venn2,
+  fill_color = c("skyblue", "salmon"),
+  stroke_size = 0.5,
+  set_name_size = 5,
+  show_percentage = FALSE
+)
+ace_counts_res #211 genes
+```
+
