@@ -59,7 +59,6 @@ res_shk <- lfcShrink(des,
 #save objects as RDS and csvs
 saveRDS(res, "/Users/jbrink/Gracz.sox9/src/atac/inj_atac_res.rds")
 saveRDS(vsd, "/Users/jbrink/Gracz.sox9/src/atac/inj_atac_vsd.rds")
-saveRDS(res, "/Users/jbrink/Gracz.sox9/src/atac/inj_atac_res.rds")
 saveRDS(res_shk, "/Users/jbrink/Gracz.sox9/src/atac/inj_atac_resShk.rds")
 
 write.csv(res, "/Users/jbrink/Gracz.sox9/src/atac/inj_atac_res.csv")
